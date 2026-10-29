@@ -20,6 +20,7 @@
 #include <linux/percpu-refcount.h>
 #include <linux/pid.h>
 #include <linux/random.h>
+#include <linux/ratelimit.h>
 #include <linux/rcupdate.h>
 #include <linux/seq_file.h>
 #include <linux/workqueue.h>
@@ -43,6 +44,15 @@
 #include "debugfs.h"
 #include "dev.h"
 #include "topo.h"
+
+/* Shared error budget for user-triggered memory registration failures. */
+static DEFINE_RATELIMIT_STATE(p2p_mem_ratelimit, 5 * HZ, 30);
+
+#define p2p_pr_err_ratelimit(fmt, ...) \
+	do { \
+		if (__ratelimit(&p2p_mem_ratelimit)) \
+			pr_err(fmt, ##__VA_ARGS__); \
+	} while (0)
 
 #define P2P_NVME_MAX_RW_SECTORS ((1U << 20) >> SECTOR_SHIFT)
 #define P2P_MAX_IOV 65536U
@@ -441,12 +451,12 @@ static int p2p_unpublish_registered_mem(struct p2p_batch *batch, u64 handle,
 		goto unlock_rcu;
 	}
 	if (mem->owner != batch) {
-		pr_err("registered memory handle 0x%llx belongs to another p2p fd\n", handle);
+		p2p_pr_err_ratelimit("registered memory handle 0x%llx belongs to another p2p fd\n", handle);
 		err = -EPERM;
 		goto unlock_rcu;
 	}
 	if (mem->owner_tgid != task_tgid(current)) {
-		pr_err("registered memory handle 0x%llx belongs to another process\n", handle);
+		p2p_pr_err_ratelimit("registered memory handle 0x%llx belongs to another process\n", handle);
 		err = -EPERM;
 		goto unlock_rcu;
 	}
@@ -561,7 +571,7 @@ static int p2p_unregister_mem(struct p2p_batch *batch, void __user *arg)
 
 	err = p2p_unpublish_registered_mem(batch, param.mem_handle, &mem);
 	if (err) {
-		pr_err("unregister memory handle 0x%llx err %d\n", param.mem_handle, err);
+		p2p_pr_err_ratelimit("unregister memory handle 0x%llx err %d\n", param.mem_handle, err);
 		return err;
 	}
 
