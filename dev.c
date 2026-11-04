@@ -1669,6 +1669,7 @@ static void dump_io_ctx_crc32(const struct p2p_io_context *io_ctx)
 {
 	u32 crc = ~0U;
 	unsigned int i;
+	void *buffer;
 
 	/*
 	 * Logical-I/O finalization observed every NVMe DMA completion before
@@ -1676,22 +1677,37 @@ static void dump_io_ctx_crc32(const struct p2p_io_context *io_ctx)
 	 */
 	dma_rmb();
 
+	buffer = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!buffer) {
+		pr_err("crc32 failed file=%pD length=0x%llx err=%d\n",
+		       io_ctx->file, io_ctx->data_size, -ENOMEM);
+		return;
+	}
+
 	for (i = 0; i < io_ctx->pa_iov_nr; i++) {
 		const struct p2p_pa_iov *iov = &io_ctx->pa_iov[i];
 		void __iomem *addr;
+		u64 offset = 0;
 
 		addr = ioremap(iov->addr, iov->len);
 		if (!addr) {
 			pr_err("crc32 failed file=%pD length=0x%llx err=%d\n",
 			       io_ctx->file, io_ctx->data_size, -ENOMEM);
+			kfree(buffer);
 			return;
 		}
 
-		crc = crc32_le(crc, (__force const unsigned char *)addr,
-			       iov->len);
+		while (offset < iov->len) {
+			size_t chunk = min_t(u64, iov->len - offset, PAGE_SIZE);
+
+			memcpy_fromio(buffer, addr + offset, chunk);
+			crc = crc32_le(crc, buffer, chunk);
+			offset += chunk;
+		}
 		iounmap(addr);
 	}
 
+	kfree(buffer);
 	crc ^= ~0U;
 	pr_info("crc32 file=%pD length=0x%llx crc32=0x%08x\n",
 		io_ctx->file, io_ctx->data_size, crc);
