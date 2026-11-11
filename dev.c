@@ -654,9 +654,9 @@ static int get_pa_iov(const struct p2p_iov *iov, unsigned int iov_nr,
 {
 	struct p2p_pinned_pa *pinned_pa;
 	struct p2p_pa_iov *new_pa_iov;
+	struct p2p_pa_iov *cur_pa_iov;
 	struct p2p_iov_map *maps;
 	unsigned int new_pa_iov_nr;
-	unsigned int new_pa_iov_idx;
 	unsigned int i;
 	int err;
 
@@ -691,7 +691,7 @@ static int get_pa_iov(const struct p2p_iov *iov, unsigned int iov_nr,
 		goto put_pinned_pa;
 	}
 
-	new_pa_iov_idx = 0;
+	cur_pa_iov = new_pa_iov;
 	for (i = 0; i < iov_nr; i++) {
 		u32 remaining = iov[i].size;
 		u32 offset = iov[i].addr - maps[i].aligned_addr;
@@ -700,16 +700,15 @@ static int get_pa_iov(const struct p2p_iov *iov, unsigned int iov_nr,
 		for (j = 0; j < maps[i].pa_num; j++) {
 			u32 len = min(remaining, maps[i].page_size - offset);
 
-			new_pa_iov[new_pa_iov_idx].addr =
-				maps[i].page_table->pages_info[j].pa + offset;
-			new_pa_iov[new_pa_iov_idx].len = len;
-			if ((new_pa_iov[new_pa_iov_idx].addr | len) & (SECTOR_SIZE - 1)) {
+			cur_pa_iov->addr = maps[i].page_table->pages_info[j].pa + offset;
+			cur_pa_iov->len = len;
+			if ((cur_pa_iov->addr | len) & (SECTOR_SIZE - 1)) {
 				pr_err("unaligned PA IOV addr 0x%llx, len 0x%x, iov %u\n",
-				       new_pa_iov[new_pa_iov_idx].addr, len, i);
+				       cur_pa_iov->addr, len, i);
 				err = -EINVAL;
 				break;
 			}
-			new_pa_iov_idx++;
+			cur_pa_iov++;
 			remaining -= len;
 			offset = 0;
 		}
@@ -774,8 +773,8 @@ static int get_registered_pa_iov(u64 handle, const struct p2p_iov *iov, unsigned
 	struct p2p_registered_mem *mem;
 	const struct p2p_iov_map *map;
 	struct p2p_pa_iov *pa_iov;
+	struct p2p_pa_iov *cur_pa_iov;
 	unsigned int pa_iov_nr = 0;
-	unsigned int pa_iov_idx = 0;
 	unsigned int i;
 	int err;
 
@@ -814,6 +813,7 @@ static int get_registered_pa_iov(u64 handle, const struct p2p_iov *iov, unsigned
 		goto put_mem;
 	}
 
+	cur_pa_iov = pa_iov;
 	for (i = 0; i < iov_nr; i++) {
 		u64 map_offset = iov[i].addr - map->aligned_addr;
 		u64 page_idx = map_offset / map->page_size;
@@ -828,9 +828,9 @@ static int get_registered_pa_iov(u64 handle, const struct p2p_iov *iov, unsigned
 				err = -EINVAL;
 				goto free_pa_iov;
 			}
-			pa_iov[pa_iov_idx].addr = pa;
-			pa_iov[pa_iov_idx].len = len;
-			pa_iov_idx++;
+			cur_pa_iov->addr = pa;
+			cur_pa_iov->len = len;
+			cur_pa_iov++;
 			remaining -= len;
 			page_idx++;
 			page_offset = 0;
