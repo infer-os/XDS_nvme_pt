@@ -693,22 +693,29 @@ static int get_pa_iov(const struct p2p_iov *iov, unsigned int iov_nr,
 
 	cur_pa_iov = new_pa_iov;
 	for (i = 0; i < iov_nr; i++) {
+		u64 next_pa = ULLONG_MAX;
 		u32 remaining = iov[i].size;
 		u32 offset = iov[i].addr - maps[i].aligned_addr;
 		unsigned int j;
 
 		for (j = 0; j < maps[i].pa_num; j++) {
 			u32 len = min(remaining, maps[i].page_size - offset);
+			u64 pa = maps[i].page_table->pages_info[j].pa + offset;
 
-			cur_pa_iov->addr = maps[i].page_table->pages_info[j].pa + offset;
-			cur_pa_iov->len = len;
-			if ((cur_pa_iov->addr | len) & (SECTOR_SIZE - 1)) {
+			if ((pa | len) & (SECTOR_SIZE - 1)) {
 				pr_err("unaligned PA IOV addr 0x%llx, len 0x%x, iov %u\n",
-				       cur_pa_iov->addr, len, i);
+				       pa, len, i);
 				err = -EINVAL;
 				break;
 			}
-			cur_pa_iov++;
+			if (pa != next_pa) {
+				cur_pa_iov->addr = pa;
+				cur_pa_iov->len = len;
+				cur_pa_iov++;
+			} else {
+				cur_pa_iov[-1].len += len;
+			}
+			next_pa = pa + len;
 			remaining -= len;
 			offset = 0;
 		}
@@ -724,7 +731,7 @@ static int get_pa_iov(const struct p2p_iov *iov, unsigned int iov_nr,
 	}
 
 	*pa_iov = new_pa_iov;
-	*pa_iov_nr = new_pa_iov_nr;
+	*pa_iov_nr = cur_pa_iov - new_pa_iov;
 	*pinned_mem = (struct p2p_pinned_io_mem) {
 		.pinned = true,
 		.pinned_pa = pinned_pa,
@@ -815,6 +822,7 @@ static int get_registered_pa_iov(u64 handle, const struct p2p_iov *iov, unsigned
 
 	cur_pa_iov = pa_iov;
 	for (i = 0; i < iov_nr; i++) {
+		u64 next_pa = ULLONG_MAX;
 		u64 map_offset = iov[i].addr - map->aligned_addr;
 		u64 page_idx = map_offset / map->page_size;
 		u32 page_offset = map_offset % map->page_size;
@@ -828,17 +836,22 @@ static int get_registered_pa_iov(u64 handle, const struct p2p_iov *iov, unsigned
 				err = -EINVAL;
 				goto free_pa_iov;
 			}
-			cur_pa_iov->addr = pa;
-			cur_pa_iov->len = len;
-			cur_pa_iov++;
+			if (pa != next_pa) {
+				cur_pa_iov->addr = pa;
+				cur_pa_iov->len = len;
+				cur_pa_iov++;
+			} else {
+				cur_pa_iov[-1].len += len;
+			}
 			remaining -= len;
 			page_idx++;
 			page_offset = 0;
+			next_pa = pa + len;
 		}
 	}
 
 	*pa_iov_out = pa_iov;
-	*pa_iov_nr_out = pa_iov_nr;
+	*pa_iov_nr_out = cur_pa_iov - pa_iov;
 	*pinned_mem = (struct p2p_pinned_io_mem) {
 		.pinned = true,
 		.reg_mem = true,
