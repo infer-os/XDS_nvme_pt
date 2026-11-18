@@ -98,7 +98,10 @@ int main(int argc, char **argv)
 	 * After this, submits use NDS_IO_F_REGISTERED_MEM; the library looks
 	 * up the kernel mem_handle from buf_addr — callers never see it.
 	 */
-	err = nds_register_mem((void *)(uintptr_t)hbm_va, length, 0);
+	struct nds_mem_range reg_range = { .addr = hbm_va, .size = length };
+	struct nds_mem_desc reg = { .ranges = &reg_range, .nr = 1 };
+
+	err = nds_register_mem(&reg);
 	if (err)
 		die("nds_register_mem", err);
 
@@ -143,7 +146,7 @@ int main(int argc, char **argv)
 		die("nds_io_destroy_ctx", err);
 	ctx = NULL;
 
-	err = nds_unregister_mem((void *)(uintptr_t)hbm_va, length, 0);
+	err = nds_unregister_mem(&reg);
 	if (err)
 		die("nds_unregister_mem", err);
 	err = nds_unregister_fs(&fs_desc);

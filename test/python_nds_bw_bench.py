@@ -190,7 +190,7 @@ def main() -> int:
             raise RuntimeError(f"nds.register_fs returned {ret}")
         try:
             if register_mem:
-                ret = nds.register_mem(cmb_va, buf_span)
+                ret = nds.register_mem([(cmb_va, buf_span)])
                 if ret:
                     raise RuntimeError(f"register_mem returned {ret}")
             ctx = nds.io_new_ctx(qd)
@@ -309,7 +309,7 @@ def main() -> int:
                 if destroy:
                     raise RuntimeError(f"io_destroy_ctx returned {destroy}")
             if register_mem:
-                unreg = nds.unregister_mem(cmb_va, buf_span)
+                unreg = nds.unregister_mem([(cmb_va, buf_span)])
                 if unreg:
                     raise RuntimeError(f"unregister_mem returned {unreg}")
         finally:

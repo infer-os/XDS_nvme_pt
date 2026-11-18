@@ -732,9 +732,9 @@ static int init_nds(void)
 	ret = nds_init(&param);
 	if (ret)
 		return ret;
-	if (param.version != NDS_API_VERSION) {
-		fprintf(stderr, "nds_init returned version %u, expected %u\n",
-			param.version, NDS_API_VERSION);
+	if (param.version != P2P_UAPI_VERSION) {
+		fprintf(stderr, "nds_init returned driver version %u, expected %u\n",
+			param.version, P2P_UAPI_VERSION);
 		nds_exit();
 		return -EPROTO;
 	}
@@ -866,24 +866,28 @@ static int run_reject(const char *topology)
 	 * iov[0] selects the registered region; iov[1] lies outside it. NDS
 	 * accepts the request from iov[0]; the kernel returns -ERANGE.
 	 */
-	ret = nds_register_mem((void *)(uintptr_t)0, 4096, 0);
-	err = expect_case("reject-reg-range-register", ret, 0);
-	if (err)
-		goto out;
-	ret = nds_unregister_mem((void *)(uintptr_t)0, 8192, 0);
-	err = expect_case("reject-reg-unregister-size", ret, -EINVAL);
-	if (err)
-		goto out;
-	cb.rw_flags = NDS_IO_F_REGISTERED_MEM;
-	cb.host_pid = 0;
-	cb.iov_cnt = 2;
-	ret = nds_io_submit(ctx, 1, &cb);
-	err = expect_case("reject-reg-iov-out-of-region", ret, -ERANGE);
 	{
-		int uret = nds_unregister_mem((void *)(uintptr_t)0, 4096, 0);
+		struct nds_mem_range reg_range = { .addr = 0, .size = 4096 };
+		struct nds_mem_range wrong_range = { .addr = 0, .size = 8192 };
+		struct nds_mem_desc reg = { .ranges = &reg_range, .nr = 1 };
+		struct nds_mem_desc wrong = { .ranges = &wrong_range, .nr = 1 };
 
-		if (uret && !err)
-			err = expect_case("reject-reg-range-unregister", uret, 0);
+		ret = nds_register_mem(&reg);
+		err = expect_case("reject-reg-range-register", ret, 0);
+		if (err)
+			goto out;
+		ret = nds_unregister_mem(&wrong);
+		err = expect_case("reject-reg-unregister-size", ret, -EINVAL);
+		if (err)
+			goto out;
+		cb.rw_flags = NDS_IO_F_REGISTERED_MEM;
+		cb.host_pid = 0;
+		cb.iov_cnt = 2;
+		ret = nds_io_submit(ctx, 1, &cb);
+		err = expect_case("reject-reg-iov-out-of-region", ret, -ERANGE);
+		ret = nds_unregister_mem(&reg);
+		if (ret && !err)
+			err = expect_case("reject-reg-range-unregister", ret, 0);
 	}
 	if (err)
 		goto out;
@@ -1797,6 +1801,8 @@ static int run_cq_race(struct stress_case *tests, size_t count,
 	bool reaper_started = false;
 	bool drain_started = false;
 	bool registered = false;
+	struct nds_mem_range reg_range = { .addr = 0, .size = cmb_size };
+	struct nds_mem_desc reg = { .ranges = &reg_range, .nr = 1 };
 	unsigned int created = 0;
 	unsigned int i;
 	int err;
@@ -1807,7 +1813,7 @@ static int run_cq_race(struct stress_case *tests, size_t count,
 		return -EINVAL;
 
 	if (registered_mem) {
-		err = nds_register_mem((void *)(uintptr_t)0, cmb_size, 0);
+		err = nds_register_mem(&reg);
 		if (err)
 			goto out;
 		registered = true;
@@ -2026,8 +2032,7 @@ out:
 	if (registered) {
 		int unregister_err;
 
-		unregister_err = nds_unregister_mem((void *)(uintptr_t)0,
-					    cmb_size, 0);
+		unregister_err = nds_unregister_mem(&reg);
 		if (unregister_err && !err)
 			err = unregister_err;
 	}
@@ -2070,6 +2075,8 @@ static int run_stress(struct stress_case *tests, size_t count,
 	unsigned int i;
 	bool barrier_initialized = false;
 	bool registered = false;
+	struct nds_mem_range reg_range = { .addr = 0, .size = cmb_size };
+	struct nds_mem_desc reg = { .ranges = &reg_range, .nr = 1 };
 	int err;
 
 	if (workers < 2 || !iterations || !cmb_size || !granularity ||
@@ -2077,7 +2084,7 @@ static int run_stress(struct stress_case *tests, size_t count,
 	    backing_page_size % granularity)
 		return -EINVAL;
 	if (registered_mem) {
-		err = nds_register_mem((void *)(uintptr_t)0, cmb_size, 0);
+		err = nds_register_mem(&reg);
 		if (err)
 			goto out;
 		registered = true;
@@ -2139,8 +2146,7 @@ out:
 	if (registered) {
 		int unregister_err;
 
-		unregister_err = nds_unregister_mem(
-			(void *)(uintptr_t)context.reg_addr, cmb_size, 0);
+		unregister_err = nds_unregister_mem(&reg);
 		if (unregister_err && !err)
 			err = unregister_err;
 	}
@@ -2160,6 +2166,8 @@ out:
 static int register_test_cases(const struct test_case *tests, size_t count,
 			       uint64_t *reg_addr, uint64_t *reg_size)
 {
+	struct nds_mem_range range;
+	struct nds_mem_desc desc = { .ranges = &range, .nr = 1 };
 	unsigned long range_start = ULONG_MAX;
 	unsigned long range_end = 0;
 	size_t i;
@@ -2182,8 +2190,9 @@ static int register_test_cases(const struct test_case *tests, size_t count,
 			range_end = end;
 	}
 
-	err = nds_register_mem((void *)(uintptr_t)range_start,
-			       range_end - range_start, 0);
+	range.addr = range_start;
+	range.size = range_end - range_start;
+	err = nds_register_mem(&desc);
 	if (err)
 		return err;
 	*reg_addr = range_start;
@@ -2219,6 +2228,8 @@ int main(int argc, char **argv)
 	unsigned int drain_overlap_ms = 0;
 	uint64_t reg_addr = 0;
 	uint64_t reg_size = 0;
+	struct nds_mem_range reg_range = { 0 };
+	struct nds_mem_desc reg = { .ranges = &reg_range, .nr = 1 };
 	bool registered_mem = false;
 	bool registered = false;
 	bool nds_ready = false;
@@ -2349,29 +2360,42 @@ int main(int argc, char **argv)
 		if (err)
 			goto reject_out;
 		invalid_init.flags = 0;
-		invalid_init.reserved[0] = 1;
-		err = expect_case("reject-init-reserved0", nds_init(&invalid_init),
-				  -EINVAL);
-		if (err)
-			goto reject_out;
-		invalid_init.reserved[0] = 0;
-		invalid_init.reserved[1] = 1;
+		invalid_init.reserved1 = 1;
 		err = expect_case("reject-init-reserved1", nds_init(&invalid_init),
 				  -EINVAL);
 		if (err)
 			goto reject_out;
-		invalid_init.reserved[1] = 0;
-		invalid_init.reserved[2] = 1;
+		invalid_init.reserved1 = 0;
+		invalid_init.reserved2 = 1;
 		err = expect_case("reject-init-reserved2", nds_init(&invalid_init),
 				  -EINVAL);
 		if (err)
 			goto reject_out;
-		invalid_init.reserved[2] = 0;
-		invalid_init.reserved[3] = 1;
-		err = expect_case("reject-init-reserved3", nds_init(&invalid_init),
+		invalid_init.reserved2 = 0;
+		invalid_init.reserved3[0] = 1;
+		err = expect_case("reject-init-reserved3-0", nds_init(&invalid_init),
 				  -EINVAL);
 		if (err)
 			goto reject_out;
+		invalid_init.reserved3[0] = 0;
+		invalid_init.reserved3[1] = 1;
+		err = expect_case("reject-init-reserved3-1", nds_init(&invalid_init),
+				  -EINVAL);
+		if (err)
+			goto reject_out;
+		invalid_init.reserved3[1] = 0;
+		invalid_init.reserved3[2] = 1;
+		err = expect_case("reject-init-reserved3-2", nds_init(&invalid_init),
+				  -EINVAL);
+		if (err)
+			goto reject_out;
+		invalid_init.reserved3[2] = 0;
+		invalid_init.reserved3[3] = 1;
+		err = expect_case("reject-init-reserved3-3", nds_init(&invalid_init),
+				  -EINVAL);
+		if (err)
+			goto reject_out;
+		invalid_init.reserved3[3] = 0;
 
 		err = init_nds();
 		if (err) {
@@ -2574,9 +2598,9 @@ out:
 	if (registered) {
 		int unregister_err;
 
-		unregister_err =
-			nds_unregister_mem((void *)(uintptr_t)reg_addr,
-					   reg_size, 0);
+		reg_range.addr = reg_addr;
+		reg_range.size = reg_size;
+		unregister_err = nds_unregister_mem(&reg);
 		if (unregister_err && !err)
 			err = unregister_err;
 	}
