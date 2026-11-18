@@ -11,8 +11,8 @@
 /* Open /dev/p2p_device O_RDWR|O_CLOEXEC. Returns fd or -errno. */
 int p2p_open_dev(void);
 
-/* Query IOCTL_GET_INFO, check the driver UAPI major version, and store the
- * full version word in @version_out. Returns 0, -EPROTONOSUPPORT or another
+/* Query IOCTL_GET_INFO, check the driver UAPI version, and store the full
+ * version word in @version_out. Returns 0, -EPROTONOSUPPORT or another
  * negative errno. */
 int p2p_check_uapi(int dev_fd, uint32_t *version_out);
 

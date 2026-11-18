@@ -69,8 +69,13 @@ int p2p_check_uapi(int dev_fd, uint32_t *version_out)
 		err = errno;
 		return (err == ENOTTY || err == EINVAL) ? -EPROTONOSUPPORT : -err;
 	}
-	if (((info.version >> 8) & 0xffU) != P2P_UAPI_VERSION_MAJOR)
+	if (info.version != P2P_UAPI_VERSION) {
+		fprintf(stderr,
+			"p2p UAPI version mismatch: driver v%u.%u, library v%u.%u\n",
+			(info.version >> 8) & 0xffU, info.version & 0xffU,
+			P2P_UAPI_VERSION_MAJOR, P2P_UAPI_VERSION_MINOR);
 		return -EPROTONOSUPPORT;
+	}
 	*version_out = info.version;
 	return 0;
 }
