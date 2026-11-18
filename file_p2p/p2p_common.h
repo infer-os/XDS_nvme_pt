@@ -1,6 +1,7 @@
 #ifndef __P2P_COMMON_H__
 #define __P2P_COMMON_H__
 
+#include <stdint.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <linux/fiemap.h>
@@ -9,6 +10,11 @@
 
 /* Open /dev/p2p_device O_RDWR|O_CLOEXEC. Returns fd or -errno. */
 int p2p_open_dev(void);
+
+/* Query IOCTL_GET_INFO, check the driver UAPI major version, and store the
+ * full version word in @version_out. Returns 0, -EPROTONOSUPPORT or another
+ * negative errno. */
+int p2p_check_uapi(int dev_fd, uint32_t *version_out);
 
 /* Discover nvme/linear/raid0 topology for block device ID @dev_id and
  * IOCTL_ADD_TOPO on @dev_fd. Requires sysfs and, for dm-linear,

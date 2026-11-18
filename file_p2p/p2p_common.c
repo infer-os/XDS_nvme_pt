@@ -60,6 +60,21 @@ int p2p_open_dev(void)
 	return dev_fd;
 }
 
+int p2p_check_uapi(int dev_fd, uint32_t *version_out)
+{
+	struct p2p_device_info info = { 0 };
+	int err;
+
+	if (ioctl(dev_fd, IOCTL_GET_INFO, &info) < 0) {
+		err = errno;
+		return (err == ENOTTY || err == EINVAL) ? -EPROTONOSUPPORT : -err;
+	}
+	if (((info.version >> 8) & 0xffU) != P2P_UAPI_VERSION_MAJOR)
+		return -EPROTONOSUPPORT;
+	*version_out = info.version;
+	return 0;
+}
+
 static int sysfs_path(char *path, size_t size, dev_t devt,
 		      const char *suffix)
 {

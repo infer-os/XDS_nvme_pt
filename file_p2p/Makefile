@@ -2,10 +2,10 @@ CC ?= cc
 CFLAGS ?= -O2 -Wall -Wextra -Werror -g -ggdb -fno-omit-frame-pointer
 CPPFLAGS += -I. -I..
 
-NDS_API_VER := $(shell sed -n 's/^[[:space:]]*#define[[:space:]]\+NDS_API_VERSION[[:space:]]\+\([0-9]\+\)u\?.*/\1/p' nds_api.h)
-NDS_MAJOR := $(shell echo $$(($(NDS_API_VER) >> 8)))
-NDS_MINOR := $(shell echo $$(($(NDS_API_VER) & 255)))
-NDS_VERSION := $(NDS_MAJOR).$(NDS_MINOR)
+# The library ABI follows the driver UAPI version in p2p_dev_uapi.h.
+P2P_UAPI_MAJOR := $(shell awk '$$2 == "P2P_UAPI_VERSION_MAJOR" { print $$3 + 0 }' p2p_dev_uapi.h)
+P2P_UAPI_MINOR := $(shell awk '$$2 == "P2P_UAPI_VERSION_MINOR" { print $$3 + 0 }' p2p_dev_uapi.h)
+NDS_VERSION := $(P2P_UAPI_MAJOR).$(P2P_UAPI_MINOR)
 NDS_LIB := libnds.so.$(NDS_VERSION)
 NDS_SONAME := libnds.so.$(NDS_VERSION)
 

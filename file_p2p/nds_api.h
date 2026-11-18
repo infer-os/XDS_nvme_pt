@@ -18,13 +18,13 @@
  *            .fs_fd = fds,
  *            .fs_fd_cnt = 1,
  *        };
- *        nds_init(&ip);
- *        assert(ip.version == NDS_API_VERSION);
+ *        nds_init(&ip);  // ip.version is the driver UAPI version
  *        nds_register_fs(&fs);
  *      Call nds_register_fs() again to add filesystems after initialization.
  *
  *   2. (Optional) Register HBM / CMB windows once:
- *        nds_register_mem(addr, size, 0);
+ *        struct nds_mem_desc mem = { .ranges = ranges, .nr = nr };
+ *        nds_register_mem(&mem);
  *      Later I/Os that use those VAs set NDS_IO_F_REGISTERED_MEM; the library
  *      looks up the handle — callers never see mem_handle.
  *
@@ -59,16 +59,19 @@
  *   - reserved fields must be zero.
  */
 
-#define NDS_API_VERSION 1u
 #define NDS_IO_MAX_IO_CNT 1024u
 #define NDS_IO_MAX_IOV 65536u
+
+#define NDS_MEM_MAX_RANGES 8192u
 
 struct nds_io_ctx;
 
 struct nds_init_param {
-	uint32_t flags;			/* must be 0 in v1 */
-	uint64_t reserved[4];		/* must be zero when unused */
-	uint32_t version;		/* output: NDS_API_VERSION on success */
+	uint32_t flags;			/* must be 0 */
+	uint32_t reserved1;		/* must be 0 */
+	uint32_t version;		/* output: driver UAPI version (major << 8 | minor) */
+	uint32_t reserved2;		/* must be 0 */
+	uint64_t reserved3[4];		/* must be zero when unused */
 };
 
 /*
@@ -83,6 +86,18 @@ struct nds_fs_desc {
 	int32_t *fs_fd;
 	uint32_t fs_fd_cnt;
 	uint32_t reserved;
+};
+
+struct nds_mem_range {
+	uint64_t addr;
+	uint64_t size;
+};
+
+struct nds_mem_desc {
+	const struct nds_mem_range *ranges;
+	uint32_t nr;
+	uint32_t flags;			/* must be 0 */
+	uint64_t reserved[4];		/* must be zero */
 };
 
 /* max_io_cnt: v1 accepts 1..NDS_IO_MAX_IO_CNT as a queue-size hint but does
@@ -177,14 +192,20 @@ int nds_register_fs(const struct nds_fs_desc *desc);
 int nds_unregister_fs(const struct nds_fs_desc *desc);
 
 /*
- * Pin / unpin an HBM (or CMB) VA range for P2P I/O.
- * flags must be 0. No handle is returned — use NDS_IO_F_REGISTERED_MEM and
- * vectors within that range on later submits. Unregister by the same base
- * address and exact size. A size mismatch returns -EINVAL, and any unregister
- * failure keeps the registration tracked so it can be retried.
+ * Pin / unpin one or more separately allocated VA ranges (for example,
+ * KV-cache blocks).
+ *
+ * This implementation keeps the single-range kernel ABI: the library creates
+ * one registration entry and one kernel handle for each range in the array.
+ * iov[0] selects the range that contains it, and every vector of that iocb
+ * must fit in that one range (-ERANGE otherwise). A scatter list that crosses
+ * ranges is not supported by this backend. An address in a gap between ranges
+ * returns -EINVAL.
+ *
+ * desc->nr must be 1..NDS_MEM_MAX_RANGES. flags and reserved must be zero.
  */
-int nds_register_mem(void *addr, uint64_t size, int flags);
-int nds_unregister_mem(void *addr, uint64_t size, int flags);
+int nds_register_mem(const struct nds_mem_desc *desc);
+int nds_unregister_mem(const struct nds_mem_desc *desc);
 
 /* Create / destroy a per-queue I/O context. Destroy drains outstanding I/O
  * and frees @ctx. The caller owns the pointer until destroy; double destroy
