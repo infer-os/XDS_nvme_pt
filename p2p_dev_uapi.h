@@ -4,6 +4,10 @@
 #include <linux/types.h>
 #include <linux/fiemap.h>
 
+#define P2P_UAPI_VERSION_MAJOR 0U
+#define P2P_UAPI_VERSION_MINOR 1U
+#define P2P_UAPI_VERSION ((P2P_UAPI_VERSION_MAJOR << 8) | P2P_UAPI_VERSION_MINOR)
+
 struct p2p_iov {
 	__u64 addr;
 	__u32 size;
@@ -11,9 +15,7 @@ struct p2p_iov {
 };
 
 #define P2P_IO_F_REGISTERED_MEM (1U << 0)
-/* Echo completion_data separately while preserving caller-owned user_data. */
-#define P2P_IO_F_COMPLETION_DATA (1U << 1)
-#define P2P_IO_F_MASK (P2P_IO_F_REGISTERED_MEM | P2P_IO_F_COMPLETION_DATA)
+#define P2P_IO_F_MASK P2P_IO_F_REGISTERED_MEM
 
 #define P2P_IO_READ 0U
 #define P2P_IO_WRITE 1U
@@ -144,16 +146,21 @@ struct topo_del_cfg {
 	__u32 reserved;
 };
 
-#define IOCTL_ADD_TOPO _IOW('k', 1, struct topo_user_cfg)
-#define IOCTL_SUBMIT_IO _IOWR('k', 2, struct p2p_io_batch_param)
-/*
- * Drain snapshots I/O contexts already published by read/write ioctls. An I/O
- * or another drain that overlaps this ioctl need not be covered by its wait.
- */
-#define IOCTL_DRAIN_IO _IOC(_IOC_READ, 'k', 3, 0)
-#define IOCTL_REGISTER_MEM _IOWR('k', 4, struct p2p_mem_register_param)
-#define IOCTL_UNREGISTER_MEM _IOW('k', 5, struct p2p_mem_unregister_param)
-#define IOCTL_GET_IO_EVENTS _IOWR('k', 6, struct p2p_getevents_param)
+/* Output only. Feature flags and reserved fields are zero for version 0.1. */
+struct p2p_device_info {
+	__u32 version;            /* major in bits 15:8, minor in bits 7:0; upper bits zero */
+	__u32 flags;
+	__u64 reserved[3];
+};
+
+#define IOCTL_GET_INFO _IOR('k', 1, struct p2p_device_info)
+#define IOCTL_REGISTER_MEM _IOWR('k', 2, struct p2p_mem_register_param)
+#define IOCTL_UNREGISTER_MEM _IOW('k', 3, struct p2p_mem_unregister_param)
+#define IOCTL_SUBMIT_IO _IOWR('k', 4, struct p2p_io_batch_param)
+#define IOCTL_GET_IO_EVENTS _IOWR('k', 5, struct p2p_getevents_param)
+
+#define IOCTL_ADD_TOPO _IOW('k', 6, struct topo_user_cfg)
 #define IOCTL_DEL_TOPO _IOW('k', 7, struct topo_del_cfg)
+#define IOCTL_DRAIN_IO _IOC(_IOC_READ, 'k', 8, 0)
 
 #endif
