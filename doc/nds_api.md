@@ -2,7 +2,7 @@
 
 ## 0. 文档说明
 
-- **NDS 依据**：本文件以 `file_p2p/nds_api.h` 为准（`NDS_API_VERSION == 1`），语义与实现细节参考 `file_p2p/nds_api.c`。
+- **NDS 依据**：本文件以 `file_p2p/nds_api.h` 为准，语义与实现细节参考 `file_p2p/nds_api.c`。
 - **GDS 依据**：NVIDIA cuFile / GPUDirect Storage 最新开发包中的 `cufile.h`（`libcufile 1.19.1.55`，对应 CUDA 13.x 的 `libcufile-dev` / `libcufile-devel`）。
 - **定位**：NDS 是面向 NPU HBM ↔ NVMe P2P 的、与 GDS 对齐的异步用户态 API。
 - **约定**：所有函数成功返回 `0` 或正计数，失败返回 `-errno`；I/O 仅异步；目标为已打开的文件或块设备 fd（不接受路径）；偏移/长度/缓冲区地址必须按 512B 扇区对齐；`reserved` 字段必须为 0。
@@ -44,8 +44,8 @@ nds_init()               进程级初始化（打开内部设备 fd）
 | 生命周期 | 驱动使用计数 | `long cuFileUseCount(void)` | 无 | 否 |
 | 目标注册 | 注册文件句柄 / 文件系统句柄 | `CUfileError_t cuFileHandleRegister(CUfileHandle_t *fh, CUfileDescr_t *descr)` | `int nds_register_fs(const struct nds_fs_desc *desc)` | 否 |
 | 目标注册 | 注销文件句柄 / 文件系统句柄 | `void cuFileHandleDeregister(CUfileHandle_t fh)` | `int nds_unregister_fs(const struct nds_fs_desc *desc)` | 否 |
-| 内存注册 | 注册设备内存 | `CUfileError_t cuFileBufRegister(const void *bufPtr_base, size_t length, int flags)` | `int nds_register_mem(void *addr, uint64_t size, int flags)` | 是 |
-| 内存注册 | 注销设备内存 | `CUfileError_t cuFileBufDeregister(const void *bufPtr_base)` | `int nds_unregister_mem(void *addr, uint64_t size, int flags)` | 是 |
+| 内存注册 | 注册设备内存 | `CUfileError_t cuFileBufRegister(const void *bufPtr_base, size_t length, int flags)` | `int nds_register_mem(const struct nds_mem_desc *desc)` | 是 |
+| 内存注册 | 注销设备内存 | `CUfileError_t cuFileBufDeregister(const void *bufPtr_base)` | `int nds_unregister_mem(const struct nds_mem_desc *desc)` | 是 |
 | I/O 上下文 | 创建批 / 上下文 | `CUfileError_t cuFileBatchIOSetUp(CUfileBatchHandle_t *batch_idp, unsigned nr)` | `int nds_io_new_ctx(const struct nds_io_ctx_param *param, struct nds_io_ctx **ctx)` | 是 |
 | I/O 上下文 | 销毁批 / 上下文 | `void cuFileBatchIODestroy(CUfileBatchHandle_t batch_idp)` | `int nds_io_destroy_ctx(struct nds_io_ctx *ctx)` | 是 |
 | 异步 I/O | 提交异步 I/O | `CUfileError_t cuFileBatchIOSubmit(CUfileBatchHandle_t batch_idp, unsigned nr, CUfileIOParams_t *iocbp, unsigned int flags)` | `int nds_io_submit(struct nds_io_ctx *ctx, int nr, const struct nds_io_cb *iocb)` | 是 |
@@ -78,25 +78,25 @@ nds_init()               进程级初始化（打开内部设备 fd）
 | 项目 | GDS | NDS |
 | --- | --- | --- |
 | 原型 | `CUfileError_t cuFileDriverOpen(void);`<br>`CUfileError_t cuFileDriverClose(void);` | `int nds_init(struct nds_init_param *param);`<br>`int nds_exit(void);` |
-| 参数 | 无 | `param` 承载 `flags`、`reserved[4]`，并**输出** `version` |
+| 参数 | 无 | `param` 承载 `flags`、`reserved1`、`reserved2`、`reserved3[4]`，并**输出** `version` |
 | 返回值 | `CUfileError_t`（`err` + `cu_err`） | `0` / `-errno` |
-| 版本协商 | 运行时 `cuFileGetVersion` | `nds_init` 成功后 `param->version == NDS_API_VERSION` |
+| 版本协商 | 运行时 `cuFileGetVersion` | `nds_init` 通过`param->version`返回版本号` |
 | 线程安全 | 库内部管理 | **非线程安全、不可重入**；须单线程调用一次，且不得与 `nds_exit` 并发 |
 
-**数据结构（`nds_init_param`）与常量（`NDS_API_VERSION`）**
+**数据结构（`nds_init_param`）**
 
 ```c
-#define NDS_API_VERSION 1u      /* 对应 GDS 的 cuFileGetVersion 版本信息 */
-
 struct nds_init_param {
-    uint32_t flags;         /* v1 必须为 0 */
-    uint64_t reserved[4];   /* 必须为 0 */
-    uint32_t version;       /* 输出：成功时为 NDS_API_VERSION */
+    uint32_t flags;         /* 必须为 0 */
+    uint32_t reserved1;     /* 必须为 0 */
+    uint32_t version;       /* 输出：驱动 UAPI 版本（major << 8 | minor） */
+    uint32_t reserved2;     /* 必须为 0 */
+    uint64_t reserved3[4];  /* 必须为 0 */
 };
 ```
 
-- `NDS_API_VERSION` 是 NDS 对 GDS `cuFileGetVersion` 的对应物，但通过 `nds_init` 输出而非独立函数。
-- `flags` / `reserved` 是 NDS 独有校验：任何非零值返回 `-EINVAL`。
+-- `param->version` 是 NDS 对 GDS `cuFileGetVersion` 的对应物，但通过 `nds_init` 输出而非独立函数。
+- `flags` / `reserved1` / `reserved2` / `reserved3` 是 NDS 独有校验：任何非零值返回 `-EINVAL`。
 
 **对应关系**：`cuFileDriverOpen` ↔ `nds_init`，`cuFileDriverClose` ↔ `nds_exit`。差异在于 NDS 把「版本检查」放进初始化输出参数。
 
@@ -130,10 +130,10 @@ struct nds_fs_desc {
 
 | 项目 | GDS | NDS |
 | --- | --- | --- |
-| 原型 | `CUfileError_t cuFileBufRegister(const void *bufPtr_base, size_t length, int flags);`<br>`CUfileError_t cuFileBufDeregister(const void *bufPtr_base);` | `int nds_register_mem(void *addr, uint64_t size, int flags);`<br>`int nds_unregister_mem(void *addr, uint64_t size, int flags);` |
-| 注册对象 | cudaMalloc 设备内存或主机内存 | HBM（或 CMB）VA 窗口 |
+| 原型 | `CUfileError_t cuFileBufRegister(const void *bufPtr_base, size_t length, int flags);`<br>`CUfileError_t cuFileBufDeregister(const void *bufPtr_base);` | `int nds_register_mem(const struct nds_mem_desc *desc);`<br>`int nds_unregister_mem(const struct nds_mem_desc *desc);` |
+| 注册对象 | cudaMalloc 设备内存或主机内存 | 一个或多个 HBM（或 CMB）VA 窗口 |
 | 句柄 | 对调用者不可见 | 对调用者不可见；NDS 不对外暴露句柄 |
-| 注销方式 | 按 `bufPtr_base` 地址 | 按**基地址 + 精确 size**（size 不匹配返回 `-EINVAL`） |
+| 注销方式 | 按 `bufPtr_base` 地址 | 按每个范围的基地址和大小匹配 |
 | flags | `CU_FILE_RDMA_REGISTER` 等 | 必须为 `0`（见下方 `NDS_IO_F_*`） |
 | 失败处理 | 返回错误码 | 返回错误码 |
 | 使用方式 | I/O 时传已注册指针 | I/O 时设 `NDS_IO_F_REGISTERED_MEM`，表示是已注册指针 |
@@ -279,9 +279,9 @@ struct nds_io_event {
 ## 3.1 典型流程
 
 1. 用 `aclrtMalloc` 等 NPU 接口分配 HBM 缓冲区。
-2. `nds_init(&ip)` 初始化，断言 `ip.version == NDS_API_VERSION`。
+2. `nds_init(&ip)` 初始化；`ip.version` 为驱动 UAPI 版本（major << 8 | minor）。
 3. 每有一个可用文件系统，调用 `nds_register_fs(&fs)` 注册其文件系统；后续可继续增量注册。
-4. （可选）对热路径缓冲区调用 `nds_register_mem(addr, size, 0)`，后续 I/O 置 `NDS_IO_F_REGISTERED_MEM`。
+4. （可选）对热路径缓冲区构造 `struct nds_mem_desc` 并调用 `nds_register_mem(&desc)`，后续 I/O 置 `NDS_IO_F_REGISTERED_MEM`。
 5. `nds_io_new_ctx(&(struct nds_io_ctx_param){ .max_io_cnt = N }, &ctx)` 创建 I/O 上下文。
 6. 填充 `nds_io_cb`，`nds_io_submit(ctx, nr, &cb)` 提交。
 7. `nds_io_getevents(ctx, min_nr, nr, events, timeout)` 收割完成事件。
@@ -320,7 +320,7 @@ int main(void)
 
     /* 2. 初始化并注册文件系统 */
     ret = nds_init(&ip);
-    assert(ret == 0 && ip.version == NDS_API_VERSION);
+    assert(ret == 0);   /* ip.version 为驱动 UAPI 版本 */
 
     int fds[] = { fd };
     struct nds_fs_desc fs = { .fs_fd = fds, .fs_fd_cnt = 1 };
@@ -371,14 +371,18 @@ int main(void)
 
 ```c
 /* hbm 来自 aclrtMalloc */
-ret = nds_register_mem(hbm, BUF_SIZE, 0);
+struct nds_mem_range range = { .addr = (uintptr_t)hbm, .size = BUF_SIZE };
+struct nds_mem_desc reg = { .ranges = &range, .nr = 1 };
+
+ret = nds_register_mem(&reg);
 assert(ret == 0);
 
 /* 之后每次 I/O 使用已注册窗口 */
 cb.rw_flags = NDS_IO_F_REGISTERED_MEM;
 cb.host_pid = 0;                      /* 注册内存时必须为 0 */
 
-nds_unregister_mem(hbm, BUF_SIZE, 0); /* size 必须与注册时完全一致 */
+/* 按地址匹配；注销数组不必与注册数组完全相同 */
+nds_unregister_mem(&reg);
 ```
 
 ## 3.3 Python 使用示例
@@ -432,4 +436,5 @@ os.close(topo_fd)
 
 | 版本 | 日期 | 说明 |
 | --- | --- | --- |
-| v1 | 2026-09-24 | 初版。基于 `file_p2p/nds_api.h`（`NDS_API_VERSION == 1`）与 libcufile 1.19.1.55 的 `cufile.h`，包含接口总览、接口对比与接口使用三部分。 |
+| v1 | 2026-09-24 | 初版。基于 `file_p2p/nds_api.h` 与 libcufile 1.19.1.55 的 `cufile.h`，包含接口总览、接口对比与接口使用三部分。 |
+| v2 | 2026-11-17 | 内存注册改为 `struct nds_mem_desc` / `struct nds_mem_range`，每个范围独立注册，注销按地址匹配。`nds_init_param` 与驱动 UAPI 对齐，`version` 改为输出 `IOCTL_GET_INFO` 返回的驱动 UAPI 版本，与`NDS_API_VERSION`的值相同。移除 `NDS_API_VERSION`。|
