@@ -1837,12 +1837,22 @@ static int p2p_del_topo(struct p2p_batch *batch, void __user *arg)
 	return 0;
 }
 
+static int p2p_get_info(void __user *arg)
+{
+	const struct p2p_device_info info = { .version = P2P_UAPI_VERSION };
+
+	return copy_to_user(arg, &info, sizeof(info)) ? -EFAULT : 0;
+}
+
 static long p2p_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct p2p_batch *batch = file->private_data;
 	int err = 0;
 
 	switch (cmd) {
+	case IOCTL_GET_INFO:
+		err = p2p_get_info((void __user *)arg);
+		break;
 	case IOCTL_SUBMIT_IO:
 		err = p2p_submit_io(batch, (void __user *)arg);
 		break;
@@ -1924,7 +1934,8 @@ static int __init p2p_drv_init(void)
 		goto del_cls;
 	}
 
-	pr_info("driver inserted done\n");
+	pr_info("driver inserted done, uapi v%u.%u\n",
+		P2P_UAPI_VERSION_MAJOR, P2P_UAPI_VERSION_MINOR);
 	return 0;
 
 del_cls:
