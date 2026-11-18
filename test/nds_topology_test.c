@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "nds_api.h"
+#include "p2p_dev_uapi.h"
 
 int main(int argc, char **argv)
 {
@@ -34,8 +35,8 @@ int main(int argc, char **argv)
 		fprintf(stderr, "nds_init failed: %s (%d)\n", strerror(-ret), ret);
 		goto out;
 	}
-	if (init.version != NDS_API_VERSION) {
-		fprintf(stderr, "unexpected NDS API version: %u\n", init.version);
+	if (init.version != P2P_UAPI_VERSION) {
+		fprintf(stderr, "unexpected driver UAPI version: %u\n", init.version);
 		ret = -EPROTO;
 		goto out_nds;
 	}
