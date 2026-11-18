@@ -46,6 +46,12 @@ int __wrap_ioctl(int fd, unsigned long request, ...)
 	va_start(ap, request);
 	arg = va_arg(ap, void *);
 	va_end(ap);
+	if (request == IOCTL_GET_INFO) {
+		struct p2p_device_info *info = arg;
+
+		info->version = P2P_UAPI_VERSION;
+		return 0;
+	}
 	if (request == FS_IOC_FIEMAP) {
 		struct fiemap *fm = arg;
 		struct fiemap_extent *extent = fm->fm_extents;

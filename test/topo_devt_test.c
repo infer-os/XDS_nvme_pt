@@ -27,6 +27,7 @@
 static const char *size_text = "8388609\n";
 static const char *read_text;
 static int open_count;
+static int info_count;
 static int add_count;
 static int del_count;
 static int add_errno;
@@ -140,10 +141,18 @@ int __wrap_ioctl(int fd, unsigned long request, ...)
 	va_list ap;
 	void *arg;
 
-	assert(fd == TOPO_FD);
 	va_start(ap, request);
 	arg = va_arg(ap, void *);
 	va_end(ap);
+	if (request == IOCTL_GET_INFO) {
+		struct p2p_device_info *info = arg;
+
+		assert(fd == BOOK_FD || fd == TOPO_FD);
+		info->version = P2P_UAPI_VERSION;
+		info_count++;
+		return 0;
+	}
+	assert(fd == TOPO_FD);
 	if (request == IOCTL_ADD_TOPO) {
 		const struct topo_user_cfg *cfg = arg;
 
@@ -233,6 +242,7 @@ int main(void)
 	 * Registration and deletion must identify the same topology.
 	 */
 	assert(nds_init(&init) == 0);
+	assert(info_count == 2);
 	assert(nds_register_fs(&fs) == 0);
 	deleting = 1;
 	assert(nds_unregister_fs(&fs) == 0);

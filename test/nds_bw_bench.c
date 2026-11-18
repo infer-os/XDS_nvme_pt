@@ -638,8 +638,11 @@ int main(int argc, char **argv)
 	if (err)
 		die("nds_register_fs", err);
 
+	struct nds_mem_range reg_range = { .addr = cmb_va, .size = buf_span };
+	struct nds_mem_desc reg = { .ranges = &reg_range, .nr = 1 };
+
 	if (register_mem) {
-		err = nds_register_mem((void *)(uintptr_t)cmb_va, buf_span, 0);
+		err = nds_register_mem(&reg);
 		if (err)
 			die("nds_register_mem", err);
 	}
@@ -878,7 +881,7 @@ int main(int argc, char **argv)
 
 	nds_io_destroy_ctx(ctx);
 	if (register_mem)
-		nds_unregister_mem((void *)(uintptr_t)cmb_va, buf_span, 0);
+		nds_unregister_mem(&reg);
 	nds_exit();
 	xds_hbm_free(&hbm);
 	close(file_fd);
