@@ -14,3 +14,4 @@
 /prepare_extents_test
 /file_raw_write_test
 /nds_file_prepare_test
+/nds_multi_range_perf

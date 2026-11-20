@@ -172,3 +172,97 @@ int xds_hbm_memcpy_d2h(void *host, const void *device, size_t n)
 	}
 	return 0;
 }
+
+static int acl_set_begin(int device_id)
+{
+	int ret;
+
+	ret = acl_load();
+	if (ret)
+		return ret;
+
+	ret = g_acl.init(NULL);
+	if (ret != 0 && ret != 100002) {
+		fprintf(stderr, "hbm_acl: aclInit failed: %d\n", ret);
+		acl_unload();
+		return ret > 0 ? -EIO : ret;
+	}
+
+	ret = g_acl.set_device(device_id);
+	if (ret != 0) {
+		fprintf(stderr, "hbm_acl: aclrtSetDevice(%d) failed: %d\n",
+			device_id, ret);
+		g_acl.finalize();
+		acl_unload();
+		return ret > 0 ? -ENODEV : ret;
+	}
+
+	return 0;
+}
+
+static void acl_set_end(int device_id)
+{
+	if (g_acl.reset_device)
+		g_acl.reset_device(device_id);
+	if (g_acl.finalize)
+		g_acl.finalize();
+	acl_unload();
+}
+
+int xds_hbm_alloc_set(struct xds_hbm_set *set, int device_id, size_t size,
+		      unsigned int nr, int malloc_policy)
+{
+	unsigned int i, j;
+	int ret;
+
+	if (!set || !size || !nr || device_id < 0)
+		return -EINVAL;
+	memset(set, 0, sizeof(*set));
+
+	ret = acl_set_begin(device_id);
+	if (ret)
+		return ret;
+
+	set->addrs = calloc(nr, sizeof(*set->addrs));
+	if (!set->addrs) {
+		acl_set_end(device_id);
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < nr; i++) {
+		ret = g_acl.malloc(&set->addrs[i], size, malloc_policy);
+		if (!ret && set->addrs[i])
+			continue;
+		fprintf(stderr,
+			"hbm_acl: aclrtMalloc(%u/%u, size=%zu, policy=%d) failed: %d\n",
+			i + 1, nr, size, malloc_policy, ret);
+		for (j = 0; j <= i; j++)
+			if (set->addrs[j])
+				g_acl.free(set->addrs[j]);
+		free(set->addrs);
+		set->addrs = NULL;
+		acl_set_end(device_id);
+		return ret > 0 ? -ENOMEM : ret;
+	}
+
+	set->size = size;
+	set->nr = nr;
+	set->device_id = device_id;
+	set->active = true;
+	return 0;
+}
+
+void xds_hbm_free_set(struct xds_hbm_set *set)
+{
+	unsigned int i;
+
+	if (!set || !set->active)
+		return;
+
+	for (i = 0; i < set->nr; i++)
+		if (set->addrs[i])
+			g_acl.free(set->addrs[i]);
+	free(set->addrs);
+	acl_set_end(set->device_id);
+	memset(set, 0, sizeof(*set));
+}
