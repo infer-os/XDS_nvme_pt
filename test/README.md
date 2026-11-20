@@ -177,6 +177,34 @@ The common `XDS_TEST_WORKDIR`,
 `XDS_TEST_KEEP_WORKDIR`, `XDS_TEST_BUILD_JOBS`, and `KSRC` controls apply to
 both entry points. Shared prepared-VM and storage helpers live in `common.sh`.
 
+## NDS multi-range performance test
+
+`nds_multi_range_perf` measures NDS PREAD bandwidth when every vector of an
+iocb comes from a different registered HBM range. The defaults match the
+large-scatter case: an 8 GiB file, 128 HBM ranges of 2 MiB, 16 KiB per
+vector, 128 vectors per iocb (2 MiB per iocb), and 64 outstanding iocbs. The
+target file is used as its own topology descriptor, so there is no separate
+topology argument.
+
+```sh
+make -C test nds_multi_range_perf
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+sudo -E ./test/nds_multi_range_perf --target /mnt/data/nds8g.bin \
+     --npu-device 0 --warmup 1 --repeat 3
+```
+
+When the target is missing or its size is not equal to `--file-size`, the test
+prefaults it by default: it truncates the file to that size and allocates the
+extents with `fallocate`. The extents are unwritten but readable. Use
+`--prefault` to always truncate and allocate the target, or `--no-prefault` to
+make a size mismatch an error.
+
+Use `--file-size`, `--ranges`, `--range-size`, `--io-size`, `--depth`,
+`--warmup`, and `--repeat` to change the workload. The iocb length is
+`ranges * io-size`, so `--file-size` must be a multiple of it. Every HBM range
+must hold `depth * io-size` bytes. `--no-register-mem` uses one-shot buffers
+instead of registered memory.
+
 ## Running the complete matrix inside the VM
 
 `run_all_tests_in_vm.sh` runs the basic suite and the RAID0, dm-linear, and
