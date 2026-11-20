@@ -894,19 +894,19 @@ static int p2p_unregister_mem(struct p2p_batch *batch, void __user *arg)
 
 	batch->mem_region_nr -= param.nr;
 	old_tbl = p2p_swap_mem_table(batch, new_tbl);
+	mutex_unlock(&batch->mem_lock);
+
 	if (old_tbl)
 		percpu_ref_kill(&old_tbl->io_refs);
 	for (i = 0; i < param.nr; i++)
 		list_add_tail(&removed[i]->node, &removed_list);
-	mutex_unlock(&batch->mem_lock);
-
-	kvfree(removed);
-	kvfree(ranges);
 	p2p_destroy_mem_region_list(&removed_list);
-	return 0;
+	err = 0;
+	goto free_removed;
 
 unlock:
 	mutex_unlock(&batch->mem_lock);
+free_removed:
 	kvfree(removed);
 free_ranges:
 	kvfree(ranges);
