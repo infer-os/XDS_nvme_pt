@@ -329,9 +329,10 @@ static void p2p_mem_free_callback(void *data)
 	(void)data;
 }
 
-static int p2p_pin_map(struct p2p_pinned_pa *pinned_pa, struct p2p_iov_map *map, u64 addr, u64 size)
+static int p2p_pin_va_range(u64 addr, u64 size, struct p2p_iov_map *map)
 {
 	struct p2p_page_table *page_table = NULL;
+	u64 aligned_addr;
 	u64 aligned_end;
 	u64 end;
 	u64 get_addr;
@@ -366,15 +367,13 @@ static int p2p_pin_map(struct p2p_pinned_pa *pinned_pa, struct p2p_iov_map *map,
 		goto put_pages;
 	}
 
-	map->page_size = page_table->page_size;
-	map->aligned_addr = round_down(addr, (u64)map->page_size);
-	if (check_add_overflow(end, (u64)map->page_size - 1, &aligned_end)) {
+	aligned_addr = round_down(addr, page_table->page_size);
+	if (check_add_overflow(end, page_table->page_size - 1, &aligned_end)) {
 		err = -EOVERFLOW;
 		goto put_pages;
 	}
-	aligned_end = round_down(aligned_end, (u64)map->page_size);
-	map->aligned_size = aligned_end - map->aligned_addr;
-	page_num = map->aligned_size / map->page_size;
+	aligned_end = round_down(aligned_end, page_table->page_size);
+	page_num = (aligned_end - aligned_addr) / page_table->page_size;
 	if (!page_num || page_num > U32_MAX || page_table->page_num != page_num) {
 		pr_err("invalid page table page_num %llu expected %llu\n",
 		       page_table->page_num, page_num);
@@ -382,13 +381,19 @@ static int p2p_pin_map(struct p2p_pinned_pa *pinned_pa, struct p2p_iov_map *map,
 		goto put_pages;
 	}
 
-	map->pa_num = page_num;
+	pr_debug("pinned VA 0x%llx+0x%llx ver %u page_num %llu page_size 0x%llx\n",
+		 addr, size, page_table->version, page_num, page_table->page_size);
+
+	map->aligned_addr = aligned_addr;
+	map->aligned_size = aligned_end - aligned_addr;
 	map->page_table = page_table;
-	pinned_pa->pinned_map_nr++;
+	map->page_size = (u32)page_table->page_size;
+	map->pa_num = (u32)page_num;
 	return 0;
 
 put_pages:
-	p2p_mem_put_pages(page_table);
+	if (page_table)
+		p2p_mem_put_pages(page_table);
 	return err;
 }
 
@@ -501,66 +506,22 @@ free_arrays:
 static int p2p_pin_mem_region(u64 addr, u64 size, struct p2p_mem_region **reg_out)
 {
 	struct p2p_mem_region *reg;
-	struct p2p_page_table *page_table = NULL;
-	u64 aligned_addr;
-	u64 aligned_end;
-	u64 end;
-	u64 get_addr;
-	u64 get_end;
-	u64 get_size;
-	u64 page_num;
-	u64 i;
+	struct p2p_iov_map map;
+	u32 i;
 	int err;
-
-	if (!size)
-		return -EINVAL;
-	if (check_add_overflow(addr, size, &end))
-		return -EOVERFLOW;
-	get_addr = round_down(addr, (u64)PAGE_SIZE);
-	if (check_add_overflow(end, (u64)PAGE_SIZE - 1, &get_end))
-		return -EOVERFLOW;
-	get_end = round_down(get_end, (u64)PAGE_SIZE);
-	get_size = get_end - get_addr;
 
 	reg = kzalloc(sizeof(*reg), GFP_KERNEL);
 	if (!reg)
 		return -ENOMEM;
 
-	err = p2p_mem_get_pages(get_addr, get_size, p2p_mem_free_callback, reg, &page_table);
-	if (err) {
-		pr_err("get page table addr 0x%llx size 0x%llx err %d\n",
-		       get_addr, get_size, err);
+	err = p2p_pin_va_range(addr, size, &map);
+	if (err)
 		goto free_reg;
-	}
 
-	if (!page_table || page_table->version != P2P_GET_PAGE_VERSION ||
-	    !page_table->pages_info || page_table->page_size < P2P_MIN_PAGE_SIZE ||
-	    page_table->page_size > U32_MAX || !is_power_of_2(page_table->page_size)) {
-		pr_err("invalid page table version %u page_size 0x%llx\n",
-		       page_table ? page_table->version : 0,
-		       page_table ? page_table->page_size : 0);
-		err = -EINVAL;
-		goto put_pages;
-	}
-
-	aligned_addr = round_down(addr, page_table->page_size);
-	if (check_add_overflow(end, page_table->page_size - 1, &aligned_end)) {
-		err = -EOVERFLOW;
-		goto put_pages;
-	}
-	aligned_end = round_down(aligned_end, page_table->page_size);
-	page_num = (aligned_end - aligned_addr) / page_table->page_size;
-	if (!page_num || page_num > U32_MAX || page_table->page_num != page_num) {
-		pr_err("invalid page table page_num %llu expected %llu\n",
-		       page_table->page_num, page_num);
-		err = -EINVAL;
-		goto put_pages;
-	}
-
-	for (i = 0; i < page_num; i++) {
-		if (page_table->pages_info[i].pa & (SECTOR_SIZE - 1)) {
-			pr_err("unaligned PA 0x%llx at page %llu for addr 0x%llx\n",
-			       page_table->pages_info[i].pa, i, addr);
+	for (i = 0; i < map.pa_num; i++) {
+		if (map.page_table->pages_info[i].pa & (SECTOR_SIZE - 1)) {
+			pr_err("unaligned PA 0x%llx at page %u for addr 0x%llx\n",
+			       map.page_table->pages_info[i].pa, i, addr);
 			err = -EINVAL;
 			goto put_pages;
 		}
@@ -568,11 +529,11 @@ static int p2p_pin_mem_region(u64 addr, u64 size, struct p2p_mem_region **reg_ou
 
 	reg->addr = addr;
 	reg->size = size;
-	reg->end = end;
-	reg->aligned_addr = aligned_addr;
-	reg->page_table = page_table;
-	reg->page_size = (u32)page_table->page_size;
-	reg->pa_num = (u32)page_num;
+	reg->end = addr + size;
+	reg->aligned_addr = map.aligned_addr;
+	reg->page_table = map.page_table;
+	reg->page_size = map.page_size;
+	reg->pa_num = map.pa_num;
 	reg->page_shift = ilog2(reg->page_size);
 	atomic_set(&reg->table_refs, 0);
 	init_completion(&reg->unused);
@@ -581,7 +542,7 @@ static int p2p_pin_mem_region(u64 addr, u64 size, struct p2p_mem_region **reg_ou
 	return 0;
 
 put_pages:
-	p2p_mem_put_pages(page_table);
+	p2p_mem_put_pages(map.page_table);
 free_reg:
 	kfree(reg);
 	return err;
@@ -1008,12 +969,13 @@ static int get_pa_iov(const struct p2p_iov *iov, unsigned int iov_nr,
 
 	new_pa_iov_nr = 0;
 	for (i = 0; i < iov_nr; i++) {
-		err = p2p_pin_map(pinned_pa, &maps[i], iov[i].addr, iov[i].size);
+		err = p2p_pin_va_range(iov[i].addr, iov[i].size, &maps[i]);
 		if (err) {
 			pr_err("get page table addr 0x%llx size 0x%x iov %u err %d\n",
 			       iov[i].addr, iov[i].size, i, err);
 			goto put_pinned_pa;
 		}
+		pinned_pa->pinned_map_nr++;
 		if (maps[i].pa_num > UINT_MAX - new_pa_iov_nr) {
 			err = -E2BIG;
 			goto put_pinned_pa;
