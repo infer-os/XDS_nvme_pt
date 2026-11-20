@@ -133,7 +133,7 @@ struct nds_fs_desc {
 | 原型 | `CUfileError_t cuFileBufRegister(const void *bufPtr_base, size_t length, int flags);`<br>`CUfileError_t cuFileBufDeregister(const void *bufPtr_base);` | `int nds_register_mem(const struct nds_mem_desc *desc);`<br>`int nds_unregister_mem(const struct nds_mem_desc *desc);` |
 | 注册对象 | cudaMalloc 设备内存或主机内存 | 一个或多个 HBM（或 CMB）VA 窗口 |
 | 句柄 | 对调用者不可见 | 对调用者不可见；NDS 不对外暴露句柄 |
-| 注销方式 | 按 `bufPtr_base` 地址 | 按每个范围的基地址和大小匹配 |
+| 注销方式 | 按 `bufPtr_base` 地址 | 按精确的 `(addr, size)` 匹配注销，支持任意子集与顺序 |
 | flags | `CU_FILE_RDMA_REGISTER` 等 | 必须为 `0`（见下方 `NDS_IO_F_*`） |
 | 失败处理 | 返回错误码 | 返回错误码 |
 | 使用方式 | I/O 时传已注册指针 | I/O 时设 `NDS_IO_F_REGISTERED_MEM`，表示是已注册指针 |
@@ -381,7 +381,7 @@ assert(ret == 0);
 cb.rw_flags = NDS_IO_F_REGISTERED_MEM;
 cb.host_pid = 0;                      /* 注册内存时必须为 0 */
 
-/* 按地址匹配；注销数组不必与注册数组完全相同 */
+/* 支持多次增量注册、单次 I/O 跨注册分散，以及按精确 (addr, size) 任意顺序/子集注销 */
 nds_unregister_mem(&reg);
 ```
 
@@ -438,3 +438,4 @@ os.close(topo_fd)
 | --- | --- | --- |
 | v1 | 2026-09-24 | 初版。基于 `file_p2p/nds_api.h` 与 libcufile 1.19.1.55 的 `cufile.h`，包含接口总览、接口对比与接口使用三部分。 |
 | v2 | 2026-11-17 | 内存注册改为 `struct nds_mem_desc` / `struct nds_mem_range`，每个范围独立注册，注销按地址匹配。`nds_init_param` 与驱动 UAPI 对齐，`version` 改为输出 `IOCTL_GET_INFO` 返回的驱动 UAPI 版本，与`NDS_API_VERSION`的值相同。移除 `NDS_API_VERSION`。|
+| v3 | 2026-11-19 | 内存注册升级为基于每 fd VA 表（`mem_fd`）：支持多次增量 `nds_register_mem()`、单次 `iocb` 跨注册分散，以及按精确 `(addr, size)` 任意顺序/子集 `nds_unregister_mem()`。 |
