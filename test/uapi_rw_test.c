@@ -354,13 +354,13 @@ int main(int argc, char **argv)
 		goto out;
 	userspace.host_pid = getpid();
 	userspace.flags = P2P_IO_F_REGISTERED_MEM;
-	userspace.mem_handle = 1;
+	userspace.mem_fd = dev_fd;
 	err = expect("userspace registered host pid", rw_file(-1, &userspace), -EINVAL);
 	if (err)
 		goto out;
 	userspace.host_pid = 0;
 	userspace.flags = 0;
-	userspace.mem_handle = 0;
+	userspace.mem_fd = -1;
 	/* Extent preparation (fallocate + FIEMAP) runs before the ioctl, so a
 	 * regular-file write now fails at the invalid device fd with EBADF
 	 * rather than the removed EOPNOTSUPP gate.

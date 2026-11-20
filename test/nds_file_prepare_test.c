@@ -20,11 +20,19 @@ static int submit_result = 1;
 static unsigned int submit_calls;
 static unsigned int submitted_items;
 static unsigned int fiemap_calls;
+static unsigned int reg_calls;
+static unsigned int unreg_calls;
+static int book_fd = -1;
+static int expect_registered_mem;
 static int target_fd[2];
 
 int __wrap_p2p_open_dev(void)
 {
-	return open("/dev/null", O_RDWR | O_CLOEXEC);
+	int fd = open("/dev/null", O_RDWR | O_CLOEXEC);
+
+	if (book_fd < 0 && fd >= 0)
+		book_fd = fd;
+	return fd;
 }
 
 static off_t file_size(int fd)
@@ -50,6 +58,30 @@ int __wrap_ioctl(int fd, unsigned long request, ...)
 		struct p2p_device_info *info = arg;
 
 		info->version = P2P_UAPI_VERSION;
+		return 0;
+	}
+	if (request == IOCTL_REGISTER_MEM) {
+		struct p2p_mem_register_param *p = arg;
+		const struct p2p_mem_range *r = (const void *)(uintptr_t)p->ranges;
+
+		assert(fd == book_fd);
+		assert(p->nr >= 1 && p->nr <= P2P_MEM_MAX_RANGES);
+		assert(p->flags == 0);
+		assert(!p->reserved[0] && !p->reserved[1] && !p->reserved[2] && !p->reserved[3]);
+		assert(r != NULL && r[0].size > 0);
+		reg_calls++;
+		return 0;
+	}
+	if (request == IOCTL_UNREGISTER_MEM) {
+		struct p2p_mem_unregister_param *p = arg;
+		const struct p2p_mem_range *r = (const void *)(uintptr_t)p->ranges;
+
+		assert(fd == book_fd);
+		assert(p->nr >= 1 && p->nr <= P2P_MEM_MAX_RANGES);
+		assert(p->flags == 0);
+		assert(!p->reserved[0] && !p->reserved[1] && !p->reserved[2] && !p->reserved[3]);
+		assert(r != NULL && r[0].size > 0);
+		unreg_calls++;
 		return 0;
 	}
 	if (request == FS_IOC_FIEMAP) {
@@ -83,6 +115,15 @@ int __wrap_ioctl(int fd, unsigned long request, ...)
 			assert(items[i].op == P2P_IO_WRITE);
 			assert(items[i].file_fd == target_fd[i]);
 			assert(items[i].ext_nr == 1);
+			assert(items[i].mem_reserved == 0);
+			if (expect_registered_mem) {
+				assert(items[i].flags == P2P_IO_F_REGISTERED_MEM);
+				assert(items[i].mem_fd == book_fd);
+				assert(items[i].host_pid == 0);
+			} else {
+				assert(items[i].flags == 0);
+				assert(items[i].mem_fd == 0);
+			}
 			assert(extent->fe_flags & FIEMAP_EXTENT_UNWRITTEN);
 			assert(file_size(items[i].file_fd) >=
 			       (off_t)(extent->fe_logical + extent->fe_length));
@@ -174,6 +215,50 @@ int main(void)
 	assert(submit_calls == 1 && submitted_items == 2 && fiemap_calls == 2);
 	assert(file_size(target_fd[0]) == 4096 && file_size(target_fd[1]) == 12288);
 	puts("nds file prepare: source validation deferred to kernel submission");
+	iov.buf_addr = 4096;
+
+	/* Per-fd registered-memory lifecycle and mem_fd propagation. */
+	{
+		struct nds_mem_range ranges[2] = {
+			{ .addr = 0x100000, .size = 4096 },
+			{ .addr = 0x400000, .size = 8192 },
+		};
+		struct nds_mem_range extra = { .addr = 0x800000, .size = 4096 };
+		struct nds_mem_desc desc = { .ranges = ranges, .nr = 2 };
+		struct nds_mem_desc extra_desc = { .ranges = &extra, .nr = 1 };
+		struct nds_mem_desc single_desc = { .ranges = ranges, .nr = 1 };
+		struct nds_io_vec scatter[2] = {
+			{ .buf_addr = 0x100000, .buf_len = 2048 },
+			{ .buf_addr = 0x800000, .buf_len = 2048 },
+		};
+
+		reset_files();
+		submit_result = 1;
+		assert(nds_register_mem(&desc) == 0);
+		assert(reg_calls == 1);
+		/* Incremental registration forwards straight to book_fd. */
+		assert(nds_register_mem(&extra_desc) == 0);
+		assert(reg_calls == 2);
+
+		expect_registered_mem = 1;
+		cb[0].rw_flags = NDS_IO_F_REGISTERED_MEM;
+		cb[0].iov = scatter;
+		cb[0].iov_cnt = 2;
+		assert(nds_io_submit(ctx, 1, cb) == 1);
+		assert(submit_calls == 1);
+
+		/* Partial/out-of-order unregistration forwards ranges to book_fd. */
+		assert(nds_unregister_mem(&single_desc) == 0);
+		assert(unreg_calls == 1);
+		assert(nds_unregister_mem(&extra_desc) == 0);
+		assert(unreg_calls == 2);
+
+		expect_registered_mem = 0;
+		cb[0].rw_flags = 0;
+		cb[0].iov = &iov;
+		cb[0].iov_cnt = 1;
+		puts("nds file prepare: per-fd memory registration passed");
+	}
 
 	assert(nds_io_destroy_ctx(ctx) == 0);
 	assert(nds_exit() == 0);

@@ -858,33 +858,73 @@ static int run_reject(const char *topology)
 	cb.rw_flags = NDS_IO_F_REGISTERED_MEM;
 	cb.host_pid = 0;
 	ret = nds_io_submit(ctx, 1, &cb);
-	err = expect_case("reject-reg-unregistered-buf", ret, -EINVAL);
+	err = expect_case("reject-reg-unregistered-buf", ret, -ENOENT);
 	if (err)
 		goto out;
 
 	/*
-	 * iov[0] selects the registered region; iov[1] lies outside it. NDS
-	 * accepts the request from iov[0]; the kernel returns -ERANGE.
+	 * Test incremental registration, overlap rejection (-EEXIST),
+	 * cross-registration scatter, size mismatch (-EINVAL), out-of-region
+	 * (-ERANGE), and out-of-order unregistration.
 	 */
 	{
 		struct nds_mem_range reg_range = { .addr = 0, .size = 4096 };
+		struct nds_mem_range second_range = { .addr = 8192, .size = 4096 };
 		struct nds_mem_range wrong_range = { .addr = 0, .size = 8192 };
 		struct nds_mem_desc reg = { .ranges = &reg_range, .nr = 1 };
+		struct nds_mem_desc second = { .ranges = &second_range, .nr = 1 };
 		struct nds_mem_desc wrong = { .ranges = &wrong_range, .nr = 1 };
+		struct nds_io_vec scatter_iov[2] = {
+			{ .buf_addr = 0, .buf_len = 512 },
+			{ .buf_addr = 8192, .buf_len = 512 },
+		};
+		struct nds_io_cb scatter_cb = cb;
+		struct nds_io_event ev = { 0 };
+		bool second_registered = false;
 
 		ret = nds_register_mem(&reg);
 		err = expect_case("reject-reg-range-register", ret, 0);
 		if (err)
 			goto out;
+		ret = nds_register_mem(&wrong);
+		err = expect_case("reject-reg-overlap-existing", ret, -EEXIST);
+		if (err)
+			goto unreg_first;
+		ret = nds_register_mem(&second);
+		err = expect_case("accept-reg-incremental-second", ret, 0);
+		if (err)
+			goto unreg_first;
+		second_registered = true;
+		scatter_cb.rw_flags = NDS_IO_F_REGISTERED_MEM;
+		scatter_cb.host_pid = 0;
+		scatter_cb.iov = scatter_iov;
+		scatter_cb.iov_cnt = 2;
+		ret = nds_io_submit(ctx, 1, &scatter_cb);
+		err = expect_case("accept-reg-cross-reg-scatter", ret, 1);
+		if (!err) {
+			ret = nds_io_getevents(ctx, 1, 1, &ev, NULL);
+			if (ret != 1 || ev.res != 0)
+				err = expect_case("accept-reg-cross-reg-scatter-ev",
+						  ret == 1 ? (int)ev.res : ret, 0);
+		}
+		if (err)
+			goto unreg_both;
 		ret = nds_unregister_mem(&wrong);
 		err = expect_case("reject-reg-unregister-size", ret, -EINVAL);
 		if (err)
-			goto out;
+			goto unreg_both;
 		cb.rw_flags = NDS_IO_F_REGISTERED_MEM;
 		cb.host_pid = 0;
 		cb.iov_cnt = 2;
 		ret = nds_io_submit(ctx, 1, &cb);
 		err = expect_case("reject-reg-iov-out-of-region", ret, -ERANGE);
+unreg_both:
+		if (second_registered) {
+			ret = nds_unregister_mem(&second);
+			if (ret && !err)
+				err = expect_case("reject-reg-second-unregister", ret, 0);
+		}
+unreg_first:
 		ret = nds_unregister_mem(&reg);
 		if (ret && !err)
 			err = expect_case("reject-reg-range-unregister", ret, 0);

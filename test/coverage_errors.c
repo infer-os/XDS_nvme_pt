@@ -56,7 +56,8 @@ static int read_one(int fd, struct p2p_io_param *io)
 int main(int argc, char **argv)
 {
 	struct { struct topo_user_cfg cfg; struct topo_user_bdev bdev; } topo = {0};
-	struct p2p_mem_register_param mem = { .size = 4096 };
+	struct p2p_mem_range mem_range = { .size = 4096 };
+	struct p2p_mem_register_param mem = { .ranges = PTR(&mem_range), .nr = 1 };
 	struct p2p_iov iov = { .size = 512 };
 	struct fiemap_extent ext = { .fe_length = 512 };
 	struct p2p_io_param io = { .host_pid = getpid(), .iov = PTR(&iov),
@@ -99,8 +100,8 @@ int main(int argc, char **argv)
 		if (mprotect(map + page, page, PROT_NONE)) return 2;
 		check("topology header only", call(fd, IOCTL_ADD_TOPO, map + page - sizeof(topo.cfg)), -EFAULT);
 		memcpy(map, &mem, sizeof(mem));
-		if (mprotect(map, page, PROT_READ)) return 2;
-		check("register copyout rollback", call(fd, IOCTL_REGISTER_MEM, map), -EFAULT);
+		if (mprotect(map, page, PROT_NONE)) return 2;
+		check("register unreadable param", call(fd, IOCTL_REGISTER_MEM, map), -EFAULT);
 		munmap(map, page * 2);
 		topo.cfg.top_dev = 0;
 		check("missing top device", call(fd, IOCTL_ADD_TOPO, &topo), -ENXIO);
@@ -116,7 +117,7 @@ int main(int argc, char **argv)
 	if (!strcmp(argv[2], "register")) {
 		mark(1); ret = call(fd, IOCTL_REGISTER_MEM, &mem); mark(0);
 		if (!ret) {
-			struct p2p_mem_unregister_param unreg = { .mem_handle = mem.mem_handle };
+			struct p2p_mem_unregister_param unreg = { .ranges = mem.ranges, .nr = mem.nr };
 			check("unregister", call(fd, IOCTL_UNREGISTER_MEM, &unreg), 0);
 		}
 		goto result;
@@ -134,13 +135,13 @@ int main(int argc, char **argv)
 		ret = call(fd, IOCTL_REGISTER_MEM, &mem);
 		if (ret) return 2;
 		io.host_pid = 0; io.flags = P2P_IO_F_REGISTERED_MEM;
-		io.mem_handle = mem.mem_handle;
+		io.mem_fd = fd;
 	}
 	if (!strcmp(argv[2], "io") || !strcmp(argv[2], "rio")) mark(1);
 	ret = read_one(fd, &io);
 	mark(0);
 	if (!strcmp(argv[2], "rio")) {
-		struct p2p_mem_unregister_param unreg = { .mem_handle = mem.mem_handle };
+		struct p2p_mem_unregister_param unreg = { .ranges = mem.ranges, .nr = mem.nr };
 		check("unregister after I/O", call(fd, IOCTL_UNREGISTER_MEM, &unreg), 0);
 	}
 	if (!strcmp(argv[2], "easy")) {

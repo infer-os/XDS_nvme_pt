@@ -156,6 +156,7 @@ int main(int argc, char **argv)
 	param.file_offset = offset;
 	param.iov = iov;
 	param.iov_nr = make_iovs(iov, cmb_va, length);
+	struct p2p_mem_range reg_range = { };
 	if (registered) {
 		unsigned long reg_size = length;
 
@@ -166,13 +167,15 @@ int main(int argc, char **argv)
 			}
 			reg_size = MIXED_READ_CMB_OFFSET + length;
 		}
-		reg.addr = cmb_va;
-		reg.size = reg_size;
+		reg_range.addr = cmb_va;
+		reg_range.size = reg_size;
+		reg.ranges = (uint64_t)(uintptr_t)&reg_range;
+		reg.nr = 1;
 		err = register_mem(dev_fd, &reg);
 		if (err)
 			goto out;
 		param.flags = P2P_IO_F_REGISTERED_MEM;
-		param.mem_handle = reg.mem_handle;
+		param.mem_fd = dev_fd;
 	}
 
 	if (op == TEST_OP_MIXED) {
@@ -201,7 +204,8 @@ int main(int argc, char **argv)
 	if (registered) {
 		int unreg_err;
 
-		unreg.mem_handle = reg.mem_handle;
+		unreg.ranges = (uint64_t)(uintptr_t)&reg_range;
+		unreg.nr = 1;
 		unreg_err = unregister_mem(dev_fd, &unreg);
 		if (!err)
 			err = unreg_err;

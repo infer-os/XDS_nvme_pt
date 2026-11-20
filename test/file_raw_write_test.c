@@ -23,7 +23,7 @@
 
 static int failures;
 static const char *filesystem_device;
-static uint64_t registered_handle;
+static int registered_mem_fd = -1;
 
 static void pass(const char *name, long got, long want)
 {
@@ -279,9 +279,9 @@ static int xds_rw(int dev_fd, unsigned int op, const char *path, unsigned long o
 		.file_offset = offset,
 		.iov = &iov,
 		.iov_nr = 1,
-		.host_pid = registered_handle ? 0 : getpid(),
-		.flags = registered_handle ? P2P_IO_F_REGISTERED_MEM : 0,
-		.mem_handle = registered_handle,
+		.host_pid = registered_mem_fd >= 0 ? 0 : getpid(),
+		.flags = registered_mem_fd >= 0 ? P2P_IO_F_REGISTERED_MEM : 0,
+		.mem_fd = registered_mem_fd,
 	};
 	int err = rw_file(dev_fd, &param);
 
@@ -752,19 +752,24 @@ int main(int argc, char **argv)
 	test_raw_bdev_regression(dev_fd, scratch, cmb_va);
 
 	{
-		struct p2p_mem_register_param reg = { .addr = cmb_va, .size = PATTERN_SIZE };
+		struct p2p_mem_range range = { .addr = cmb_va, .size = PATTERN_SIZE };
+		struct p2p_mem_register_param reg = {
+			.ranges = (uint64_t)(uintptr_t)&range,
+			.nr = 1,
+		};
 		struct p2p_mem_unregister_param unreg = { 0 };
 		int err = register_mem(dev_fd, &reg);
 
 		pass("regular-register-memory", err, 0);
 		if (!err) {
-			registered_handle = reg.mem_handle;
+			registered_mem_fd = dev_fd;
 			test_sparse_roundtrip(dev_fd, directory, scratch, cmb_va, false);
 			test_sparse_roundtrip(dev_fd, directory, scratch, cmb_va, true);
 			test_unwritten_roundtrip(dev_fd, directory, scratch, cmb_va);
 			test_guarded_overwrite(dev_fd, directory, scratch, cmb_va);
-			unreg.mem_handle = registered_handle;
-			registered_handle = 0;
+			unreg.ranges = (uint64_t)(uintptr_t)&range;
+			unreg.nr = 1;
+			registered_mem_fd = -1;
 			pass("regular-unregister-memory", unregister_mem(dev_fd, &unreg), 0);
 		}
 	}
