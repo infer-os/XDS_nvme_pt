@@ -26,7 +26,7 @@
  *        struct nds_mem_desc mem = { .ranges = ranges, .nr = nr };
  *        nds_register_mem(&mem);
  *      Later I/Os that use those VAs set NDS_IO_F_REGISTERED_MEM; the library
- *      looks up the handle — callers never see mem_handle.
+ *      passes its internal memory-table fd to the driver automatically.
  *
  *   3. Create an I/O context and submit work (Linux-AIO style):
  *        struct nds_io_ctx *ctx;
@@ -135,8 +135,8 @@ struct nds_io_vec {
  * One async I/O request. Fill an array of these and pass to nds_io_submit().
  *
  * iov / iov_cnt describe the HBM (or CMB) VA windows for this transfer.
- * With NDS_IO_F_REGISTERED_MEM, iov[0] selects a region previously passed to
- * nds_register_mem(); the kernel requires every vector to fit that region.
+ * With NDS_IO_F_REGISTERED_MEM, every vector must fit within a single
+ * registered range (-ERANGE otherwise, -ENOENT if no ranges are registered).
  * Otherwise buffers are one-shot.
  *
  * Regular writes preallocate before FIEMAP, even if later submission fails.
@@ -193,14 +193,14 @@ int nds_unregister_fs(const struct nds_fs_desc *desc);
 
 /*
  * Pin / unpin one or more separately allocated VA ranges (for example,
- * KV-cache blocks).
+ * KV-cache blocks) into the process's registered-memory VA table.
  *
- * This implementation keeps the single-range kernel ABI: the library creates
- * one registration entry and one kernel handle for each range in the array.
- * iov[0] selects the range that contains it, and every vector of that iocb
- * must fit in that one range (-ERANGE otherwise). A scatter list that crosses
- * ranges is not supported by this backend. An address in a gap between ranges
- * returns -EINVAL.
+ * Ranges may be registered in one batch or incrementally across multiple
+ * nds_register_mem() calls. One NDS_IO_F_REGISTERED_MEM iocb may scatter
+ * across any registered ranges (each vector must fit within a single
+ * registered range; -ERANGE otherwise). Any subset of registered ranges may
+ * be unregistered in any order by exact (addr, size) match (-ENOENT if
+ * missing, -EINVAL on size mismatch).
  *
  * desc->nr must be 1..NDS_MEM_MAX_RANGES. flags and reserved must be zero.
  */

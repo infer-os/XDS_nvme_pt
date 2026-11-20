@@ -13,14 +13,14 @@ struct io_parameter {
 	unsigned int iov_nr;
 	unsigned int flags;
 	int host_pid;
-	uint64_t mem_handle;
+	int mem_fd;
 };
 
 int new_p2p_fd(void);
 int close_p2p_fd(int dev_fd);
 int add_topo(int dev_fd, const char *dev);
 int del_topo(int dev_fd, const char *dev);
-int register_mem(int dev_fd, struct p2p_mem_register_param *param);
+int register_mem(int dev_fd, const struct p2p_mem_register_param *param);
 int unregister_mem(int dev_fd, const struct p2p_mem_unregister_param *param);
 /* Regular writes preallocate before submission. File I/O uses raw extents,
  * including unwritten extents, without filesystem coherence or conversion.
