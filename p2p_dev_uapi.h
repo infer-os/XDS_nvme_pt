@@ -34,7 +34,8 @@ struct p2p_io_param {
 	unsigned int flags;
 	int file_fd;
 	int host_pid;              /* calling process TGID; zero with registered memory */
-	__u64 mem_handle;
+	__s32 mem_fd;              /* /dev/p2p_device fd holding VA table; ignored unless P2P_IO_F_REGISTERED_MEM is set */
+	__u32 mem_reserved;        /* must be zero */
 	__u64 user_data;          /* echo'd in the completion event */
 	__u64 iov;                /* userspace pointer to struct p2p_iov[] */
 	unsigned int iov_nr;
@@ -70,16 +71,39 @@ struct p2p_getevents_param {
 	__u64 events;           /* userspace pointer to struct p2p_io_event[] */
 };
 
-struct p2p_mem_register_param {
+struct p2p_mem_range {
 	__u64 addr;
 	__u64 size;
-	__u64 reserved;
-	__u64 mem_handle;
 };
 
+#define P2P_MEM_MAX_RANGES 8192U
+
+/*
+ * Register 1..P2P_MEM_MAX_RANGES non-overlapping VA ranges into this fd's
+ * VA->PA table. Ranges need not be sorted. Fails atomically if any range is
+ * empty/overflows (-EINVAL/-EOVERFLOW), overlaps another range in this call
+ * (-EINVAL), overlaps an existing range in this fd (-EEXIST), or exceeds the
+ * per-fd total range limit (-E2BIG).
+ */
+struct p2p_mem_register_param {
+	__u64 ranges;             /* userspace pointer to struct p2p_mem_range[] */
+	__u32 nr;                 /* 1..P2P_MEM_MAX_RANGES */
+	__u32 flags;              /* must be zero */
+	__u64 reserved[4];        /* must be zero */
+};
+
+/*
+ * Unregister 1..P2P_MEM_MAX_RANGES previously registered VA ranges from this
+ * fd's VA->PA table. Each (addr, size) must exactly match an existing
+ * registered range (no partial unpinning, no duplicates within the array).
+ * Fails atomically (-ENOENT / -EINVAL) if any entry does not match.
+ * Blocks until all in-flight I/Os referencing the removed ranges complete.
+ */
 struct p2p_mem_unregister_param {
-	__u64 mem_handle;
-	__u64 reserved;
+	__u64 ranges;             /* userspace pointer to struct p2p_mem_range[] */
+	__u32 nr;                 /* 1..P2P_MEM_MAX_RANGES */
+	__u32 flags;              /* must be zero */
+	__u64 reserved[4];        /* must be zero */
 };
 
 #define P2P_TOPO_NAME_LEN 32
@@ -154,7 +178,7 @@ struct p2p_device_info {
 };
 
 #define IOCTL_GET_INFO _IOR('k', 1, struct p2p_device_info)
-#define IOCTL_REGISTER_MEM _IOWR('k', 2, struct p2p_mem_register_param)
+#define IOCTL_REGISTER_MEM _IOW('k', 2, struct p2p_mem_register_param)
 #define IOCTL_UNREGISTER_MEM _IOW('k', 3, struct p2p_mem_unregister_param)
 #define IOCTL_SUBMIT_IO _IOWR('k', 4, struct p2p_io_batch_param)
 #define IOCTL_GET_IO_EVENTS _IOWR('k', 5, struct p2p_getevents_param)
