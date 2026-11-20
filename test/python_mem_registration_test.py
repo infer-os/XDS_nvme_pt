@@ -10,6 +10,8 @@ import file_p2p
 
 REG_ADDR = 512
 REG_SIZE = (4 << 20) - REG_ADDR
+ADJ_REG_ADDR = REG_ADDR + REG_SIZE
+ADJ_REG_SIZE = 2 << 20
 SECOND_REG_ADDR = (8 << 20) + 512
 SECOND_REG_SIZE = (4 << 20) - 512
 REGISTERED = file_p2p.P2P_IO_F_REGISTERED_MEM
@@ -25,9 +27,9 @@ def require(operation: str, actual: int, expected: int = 0) -> None:
         raise RuntimeError(f"{operation} returned {actual}, expected {expected}")
 
 
-def registered_read(dev_fd: int, source: str, handle: int, iovs: object) -> int:
+def registered_read(io_fd: int, source: str, mem_fd: int, iovs: object) -> int:
     return file_p2p.rw_file(
-        dev_fd, file_p2p.P2P_IO_READ, source, 0, iovs, handle, REGISTERED
+        io_fd, file_p2p.P2P_IO_READ, source, 0, iovs, mem_fd, REGISTERED
     )
 
 
@@ -41,30 +43,38 @@ def main() -> int:
     if dev_fd < 0 or other_fd < 0:
         raise RuntimeError(f"new_p2p_fd returned {dev_fd}, {other_fd}")
 
-    handle = 0
-    second_handle = 0
+    primary_registered = False
+    second_registered = False
+    adj_registered = False
     try:
         require("add_topo", file_p2p.add_topo(dev_fd, args.topology))
         require("add_topo other", file_p2p.add_topo(other_fd, args.topology))
 
-        handle = file_p2p.register_mem(dev_fd, REG_ADDR, REG_SIZE)
-        if handle is None:
-            raise RuntimeError(f"register_mem returned {handle}")
+        require(
+            "register primary",
+            file_p2p.register_mem(dev_fd, [(REG_ADDR, REG_SIZE)]),
+        )
+        primary_registered = True
 
-        if file_p2p.register_mem(dev_fd, REG_ADDR, 0) is not None:
-            print(
-                "api=python case=register zero size ret=0 expected=-22",
-                flush=True,
-            )
-            raise RuntimeError("zero-size registration succeeded")
-        print(
-            "api=python case=register zero size ret=-22 expected=-22",
-            flush=True,
+        require(
+            "register zero size",
+            file_p2p.register_mem(dev_fd, [(REG_ADDR, 0)]),
+            -errno.EINVAL,
         )
         require(
-            "zero handle",
-            registered_read(dev_fd, args.topology, 0, [(REG_ADDR, 512)]),
-            -errno.EINVAL,
+            "register overlap existing",
+            file_p2p.register_mem(dev_fd, [(REG_ADDR + 4096, 4096)]),
+            -errno.EEXIST,
+        )
+        require(
+            "negative mem_fd",
+            registered_read(dev_fd, args.topology, -1, [(REG_ADDR, 512)]),
+            -errno.EBADF,
+        )
+        require(
+            "empty mem_fd",
+            registered_read(dev_fd, args.topology, other_fd, [(REG_ADDR, 512)]),
+            -errno.ENOENT,
         )
         require(
             "unknown flags",
@@ -74,7 +84,7 @@ def main() -> int:
                 args.topology,
                 0,
                 [(REG_ADDR, 512)],
-                handle,
+                dev_fd,
                 UNKNOWN_FLAG,
             ),
             -errno.EOPNOTSUPP,
@@ -84,91 +94,111 @@ def main() -> int:
             registered_read(
                 dev_fd,
                 args.topology,
-                handle,
+                dev_fd,
                 [(REG_ADDR + REG_SIZE, 512)],
             ),
             -errno.ERANGE,
         )
         require(
-            "other fd",
-            registered_read(other_fd, args.topology, handle, [(REG_ADDR, 512)]),
+            "other io_fd using mem_fd",
+            registered_read(other_fd, args.topology, dev_fd, [(REG_ADDR, 512)]),
         )
         require("drain other fd", file_p2p.drain_io(other_fd))
         require(
-            "unregister on other fd",
-            file_p2p.unregister_mem(other_fd, handle),
-            -errno.EPERM,
+            "unregister on empty other fd",
+            file_p2p.unregister_mem(other_fd, [(REG_ADDR, REG_SIZE)]),
+            -errno.ENOENT,
         )
 
-        second_handle = file_p2p.register_mem(
-            dev_fd, SECOND_REG_ADDR, SECOND_REG_SIZE
-        )
-        if second_handle is None or second_handle == 0 or second_handle == handle:
-            raise RuntimeError(
-                f"second register_mem returned {second_handle}"
-            )
+        # Incremental registration + cross-registration scatter + adjacent crossing
         require(
-            "primary of multiple registered memories",
-            registered_read(
-                other_fd, args.topology, handle, [(REG_ADDR + 512, 512)]
-            ),
+            "register adjacent",
+            file_p2p.register_mem(dev_fd, [(ADJ_REG_ADDR, ADJ_REG_SIZE)]),
         )
+        adj_registered = True
         require(
-            "second of multiple registered memories",
+            "register second",
+            file_p2p.register_mem(dev_fd, [(SECOND_REG_ADDR, SECOND_REG_SIZE)]),
+        )
+        second_registered = True
+
+        require(
+            "cross-registration scatter",
             registered_read(
                 other_fd,
                 args.topology,
-                second_handle,
-                [(SECOND_REG_ADDR, 512)],
+                dev_fd,
+                [(REG_ADDR, 512), (SECOND_REG_ADDR, 512)],
             ),
+        )
+        require(
+            "adjacent straddling IOV rejected",
+            registered_read(
+                other_fd,
+                args.topology,
+                dev_fd,
+                [(ADJ_REG_ADDR - 1024, 2048)],
+            ),
+            -errno.ERANGE,
         )
         require("drain multiple registered memories", file_p2p.drain_io(other_fd))
-        stale_second_handle = second_handle
+
         require(
             "unregister second memory",
-            file_p2p.unregister_mem(dev_fd, second_handle),
+            file_p2p.unregister_mem(dev_fd, [(SECOND_REG_ADDR, SECOND_REG_SIZE)]),
         )
-        second_handle = 0
+        second_registered = False
         require(
-            "unregistered second handle",
+            "removed second range",
             registered_read(
                 other_fd,
                 args.topology,
-                stale_second_handle,
+                dev_fd,
                 [(SECOND_REG_ADDR, 512)],
             ),
-            -errno.ENOENT,
+            -errno.ERANGE,
         )
         require(
             "primary after second unregister",
             registered_read(
-                other_fd, args.topology, handle, [(REG_ADDR + 512, 512)]
+                other_fd, args.topology, dev_fd, [(REG_ADDR + 512, 512)]
             ),
         )
         require("drain surviving primary", file_p2p.drain_io(other_fd))
 
+        # Cross-process sharing via fork(): read succeeds, reg/unreg returns -EPERM
         child = os.fork()
         if child == 0:
+            child_io_fd = file_p2p.new_p2p_fd()
             read_result = registered_read(
-                dev_fd, args.topology, handle, [(REG_ADDR, 512)]
+                child_io_fd, args.topology, dev_fd, [(REG_ADDR, 512)]
             )
-            unregister_result = file_p2p.unregister_mem(dev_fd, handle)
+            if read_result == 0:
+                read_result = file_p2p.drain_io(child_io_fd)
+            file_p2p.close_p2p_fd(child_io_fd)
+            reg_result = file_p2p.register_mem(
+                dev_fd, [(SECOND_REG_ADDR, SECOND_REG_SIZE)]
+            )
+            unregister_result = file_p2p.unregister_mem(
+                dev_fd, [(REG_ADDR, REG_SIZE)]
+            )
             os._exit(
                 0
-                if read_result == -errno.EPERM
+                if read_result == 0
+                and reg_result == -errno.EPERM
                 and unregister_result == -errno.EPERM
                 else 1
             )
         _, status = os.waitpid(child, 0)
         if not os.WIFEXITED(status) or os.WEXITSTATUS(status):
-            raise RuntimeError("inherited-fd process-scope check failed")
+            raise RuntimeError("inherited-fd cross-process check failed")
 
         require(
             "multi-IOV read",
             registered_read(
                 dev_fd,
                 args.topology,
-                handle,
+                dev_fd,
                 [
                     (REG_ADDR, 512),
                     ((2 << 20) - 512, 1024),
@@ -182,33 +212,35 @@ def main() -> int:
                 registered_read(
                     dev_fd,
                     args.topology,
-                    handle,
+                    dev_fd,
                     [(REG_ADDR + index * 512, 512)],
                 ),
             )
 
         require("drain", file_p2p.drain_io(dev_fd))
-        require("unregister", file_p2p.unregister_mem(dev_fd, handle))
-
-        new_handle = file_p2p.register_mem(dev_fd, REG_ADDR, REG_SIZE)
-        if new_handle is None:
-            raise RuntimeError(f"second register_mem returned {new_handle}")
-        if new_handle == handle:
-            raise RuntimeError("registered memory handle was reused")
         require(
-            "stale handle",
-            registered_read(dev_fd, args.topology, handle, [(REG_ADDR, 512)]),
+            "unregister adjacent and primary",
+            file_p2p.unregister_mem(
+                dev_fd, [(ADJ_REG_ADDR, ADJ_REG_SIZE), (REG_ADDR, REG_SIZE)]
+            ),
+        )
+        adj_registered = False
+        primary_registered = False
+
+        require(
+            "empty after full unregister",
+            registered_read(dev_fd, args.topology, dev_fd, [(REG_ADDR, 512)]),
             -errno.ENOENT,
         )
-        require("unregister replacement", file_p2p.unregister_mem(dev_fd, new_handle))
-        handle = 0
     finally:
         file_p2p.drain_io(other_fd)
         file_p2p.drain_io(dev_fd)
-        if second_handle:
-            file_p2p.unregister_mem(dev_fd, second_handle)
-        if handle:
-            file_p2p.unregister_mem(dev_fd, handle)
+        if second_registered:
+            file_p2p.unregister_mem(dev_fd, [(SECOND_REG_ADDR, SECOND_REG_SIZE)])
+        if adj_registered:
+            file_p2p.unregister_mem(dev_fd, [(ADJ_REG_ADDR, ADJ_REG_SIZE)])
+        if primary_registered:
+            file_p2p.unregister_mem(dev_fd, [(REG_ADDR, REG_SIZE)])
         file_p2p.close_p2p_fd(other_fd)
         file_p2p.close_p2p_fd(dev_fd)
 

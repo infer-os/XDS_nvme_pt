@@ -56,20 +56,19 @@ def main() -> int:
     if dev_fd < 0:
         raise RuntimeError(f"new_p2p_fd returned {dev_fd}")
 
-    handle = None
+    reg_range = None
     try:
         require("add_topo", file_p2p.add_topo(dev_fd, args.topology))
         flags = 0
+        mem_fd = -1
         if args.registered_mem:
             register_length = args.length
             if args.op == "mixed":
                 register_length += MIXED_READ_CMB_OFFSET
-            handle = file_p2p.register_mem(
-                dev_fd, args.cmb_va, register_length
-            )
-            if handle is None:
-                raise RuntimeError("register_mem failed")
+            reg_range = (args.cmb_va, register_length)
+            require("register_mem", file_p2p.register_mem(dev_fd, [reg_range]))
             flags = file_p2p.P2P_IO_F_REGISTERED_MEM
+            mem_fd = dev_fd
 
         result = file_p2p.rw_file(
             dev_fd,
@@ -77,7 +76,7 @@ def main() -> int:
             args.target,
             args.offset,
             make_iovs(args.cmb_va, args.length),
-            handle or 0,
+            mem_fd,
             flags,
         )
         if not result and args.op == "mixed":
@@ -87,18 +86,21 @@ def main() -> int:
                 args.target,
                 args.source_offset,
                 make_iovs(args.cmb_va + MIXED_READ_CMB_OFFSET, args.length),
-                handle or 0,
+                mem_fd,
                 flags,
             )
         drain_result = file_p2p.drain_io(dev_fd)
         require("rw_file", result)
         require("drain_io", drain_result)
-        if handle is not None:
-            require("unregister_mem", file_p2p.unregister_mem(dev_fd, handle))
-            handle = None
+        if reg_range is not None:
+            require(
+                "unregister_mem",
+                file_p2p.unregister_mem(dev_fd, [reg_range]),
+            )
+            reg_range = None
     finally:
-        if handle is not None:
-            file_p2p.unregister_mem(dev_fd, handle)
+        if reg_range is not None:
+            file_p2p.unregister_mem(dev_fd, [reg_range])
         file_p2p.close_p2p_fd(dev_fd)
 
     print(f"api=python case={args.op} ret=0 expected=0")

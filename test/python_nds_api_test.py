@@ -260,10 +260,43 @@ def run_reject(topology: str) -> None:
                     )
                 ],
             ),
-            -errno.EINVAL,
+            -errno.ENOENT,
         )
         require("reject-reg-range-register", nds.register_mem([(0, 4096)]), 0)
+        second_registered = False
         try:
+            require(
+                "reject-reg-overlap-existing",
+                nds.register_mem([(0, 8192)]),
+                -errno.EEXIST,
+            )
+            require(
+                "accept-reg-incremental-second",
+                nds.register_mem([(8192, 4096)]),
+                0,
+            )
+            second_registered = True
+            require(
+                "accept-reg-cross-reg-scatter",
+                nds.io_submit(
+                    ctx,
+                    [
+                        (
+                            nds.NDS_IO_OP_PREAD,
+                            topo_fd,
+                            0,
+                            [(0, 512), (8192, 512)],
+                            nds.NDS_IO_F_REGISTERED_MEM,
+                            0,
+                            20,
+                        )
+                    ],
+                ),
+                1,
+            )
+            events = nds.io_getevents(ctx, 1, 1)
+            if events != [(20, 0)]:
+                raise RuntimeError(f"cross-reg scatter events={events}")
             require(
                 "reject-reg-unregister-size",
                 nds.unregister_mem([(0, 8192)]),
@@ -288,6 +321,12 @@ def run_reject(topology: str) -> None:
                 -errno.ERANGE,
             )
         finally:
+            if second_registered:
+                require(
+                    "reject-reg-second-unregister",
+                    nds.unregister_mem([(8192, 4096)]),
+                    0,
+                )
             require(
                 "reject-reg-range-unregister",
                 nds.unregister_mem([(0, 4096)]),

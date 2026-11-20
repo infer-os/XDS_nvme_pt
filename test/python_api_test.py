@@ -97,14 +97,14 @@ def load_stress_manifest(path: Path) -> List[StressCase]:
     return tests
 
 
-def submit(dev_fd: int, test: TestCase, flags: int, mem_handle: int) -> None:
+def submit(dev_fd: int, test: TestCase, flags: int, mem_fd: int) -> None:
     test.result = file_p2p.rw_file(
         dev_fd,
         file_p2p.P2P_IO_READ,
         test.path,
         test.file_offset,
         [(test.cmb_va, test.length)],
-        mem_handle,
+        mem_fd,
         flags,
     )
     print(
@@ -128,10 +128,10 @@ def drain(dev_fd: int) -> None:
 
 
 def run_single(
-    dev_fd: int, tests: List[TestCase], flags: int, mem_handle: int
+    dev_fd: int, tests: List[TestCase], flags: int, mem_fd: int
 ) -> None:
     for test in tests:
-        submit(dev_fd, test, flags, mem_handle)
+        submit(dev_fd, test, flags, mem_fd)
         check_result(test)
         if test.expected == 0:
             drain(dev_fd)
@@ -139,18 +139,18 @@ def run_single(
 
 
 def run_queued(
-    dev_fd: int, tests: List[TestCase], flags: int, mem_handle: int
+    dev_fd: int, tests: List[TestCase], flags: int, mem_fd: int
 ) -> None:
     if any(test.expected for test in tests):
         raise ValueError("queued mode only accepts successful cases")
     for test in tests:
-        submit(dev_fd, test, flags, mem_handle)
+        submit(dev_fd, test, flags, mem_fd)
         check_result(test)
     drain(dev_fd)
 
 
 def run_threaded(
-    dev_fd: int, tests: List[TestCase], flags: int, mem_handle: int
+    dev_fd: int, tests: List[TestCase], flags: int, mem_fd: int
 ) -> None:
     if any(test.expected for test in tests):
         raise ValueError("threaded mode only accepts successful cases")
@@ -158,7 +158,7 @@ def run_threaded(
 
     def worker(test: TestCase) -> None:
         barrier.wait()
-        submit(dev_fd, test, flags, mem_handle)
+        submit(dev_fd, test, flags, mem_fd)
 
     threads = [threading.Thread(target=worker, args=(test,)) for test in tests]
     for thread in threads:
@@ -294,7 +294,7 @@ def run_stress(
     granularity: int,
     backing_page_size: int,
     result_manifest: Path,
-    mem_handle: int,
+    registered_mem: bool,
     registration_fd: int,
 ) -> None:
     matrix = stress_matrix(tests, workers, iterations)
@@ -303,7 +303,7 @@ def run_stress(
     fds: List[Optional[int]] = [None] * workers
     errors: List[BaseException] = []
     error_lock = threading.Lock()
-    flags = file_p2p.P2P_IO_F_REGISTERED_MEM if mem_handle else 0
+    flags = file_p2p.P2P_IO_F_REGISTERED_MEM if registered_mem else 0
 
     def failed() -> bool:
         with error_lock:
@@ -372,7 +372,7 @@ def run_stress(
                             test.path,
                             test.file_offset,
                             [(va, test.length)],
-                            mem_handle,
+                            registration_fd,
                             flags,
                         )
                         print(
@@ -451,7 +451,7 @@ def main() -> int:
             parser.error("stress mode requires all stress-specific options")
         tests = load_stress_manifest(args.manifest)
         registration_fd = -1
-        mem_handle = 0
+        mem_registered = False
         try:
             if args.registered_mem:
                 registration_fd = file_p2p.new_p2p_fd()
@@ -459,12 +459,12 @@ def main() -> int:
                     raise RuntimeError(
                         f"new registration fd returned {registration_fd}"
                     )
-                handle = file_p2p.register_mem(
-                    registration_fd, 0, args.cmb_size
+                result = file_p2p.register_mem(
+                    registration_fd, [(0, args.cmb_size)]
                 )
-                if handle is None or handle == 0:
-                    raise RuntimeError(f"register_mem returned {handle}")
-                mem_handle = handle
+                if result:
+                    raise RuntimeError(f"register_mem returned {result}")
+                mem_registered = True
             run_stress(
                 args.topology,
                 tests,
@@ -474,13 +474,15 @@ def main() -> int:
                 args.va_granularity,
                 args.backing_page_size,
                 args.result_manifest,
-                mem_handle,
+                mem_registered,
                 registration_fd,
             )
         finally:
             cleanup_errors = []
-            if mem_handle:
-                result = file_p2p.unregister_mem(registration_fd, mem_handle)
+            if mem_registered:
+                result = file_p2p.unregister_mem(
+                    registration_fd, [(0, args.cmb_size)]
+                )
                 if result:
                     cleanup_errors.append(f"unregister_mem returned {result}")
             if registration_fd >= 0:
@@ -506,7 +508,7 @@ def main() -> int:
     if dev_fd < 0:
         raise RuntimeError(f"new_p2p_fd returned {dev_fd}")
     registration_fd = -1
-    mem_handle = 0
+    reg_range: Optional[Tuple[int, int]] = None
     try:
         result = file_p2p.add_topo(dev_fd, args.topology)
         if result:
@@ -518,26 +520,26 @@ def main() -> int:
                     f"new registration fd returned {registration_fd}"
                 )
             addr, size = registered_range(tests)
-            handle = file_p2p.register_mem(registration_fd, addr, size)
-            if handle is None or handle == 0:
-                raise RuntimeError(f"register_mem returned {handle}")
-            mem_handle = handle
+            result = file_p2p.register_mem(registration_fd, [(addr, size)])
+            if result:
+                raise RuntimeError(f"register_mem returned {result}")
+            reg_range = (addr, size)
         flags = (
             file_p2p.P2P_IO_F_REGISTERED_MEM if args.registered_mem else 0
         )
         if args.mode == "single":
-            run_single(dev_fd, tests, flags, mem_handle)
+            run_single(dev_fd, tests, flags, registration_fd)
         elif args.mode == "queued":
-            run_queued(dev_fd, tests, flags, mem_handle)
+            run_queued(dev_fd, tests, flags, registration_fd)
         else:
-            run_threaded(dev_fd, tests, flags, mem_handle)
+            run_threaded(dev_fd, tests, flags, registration_fd)
     finally:
         cleanup_errors = []
         result = file_p2p.drain_io(dev_fd)
         if result:
             cleanup_errors.append(f"drain_io returned {result}")
-        if mem_handle:
-            result = file_p2p.unregister_mem(registration_fd, mem_handle)
+        if reg_range is not None:
+            result = file_p2p.unregister_mem(registration_fd, [reg_range])
             if result:
                 cleanup_errors.append(f"unregister_mem returned {result}")
         if registration_fd >= 0:
