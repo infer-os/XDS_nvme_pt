@@ -44,16 +44,22 @@ static unsigned long long expected_size2;
 /* The partition has a different size from its parent namespace. */
 static const char *sysfs_text(const char *path)
 {
+	if (!strcmp(path, "/sys/dev/block/259:0/dev"))
+		return "259:0\n";
 	if (!strcmp(path, "/sys/dev/block/259:0/device/subsysnqn"))
 		return "nqn.test\n";
 	if (!strcmp(path, "/sys/dev/block/259:0/size"))
 		return size_text;
+	if (!strcmp(path, "/sys/dev/block/259:1/dev"))
+		return "259:1\n";
 	if (!strcmp(path, "/sys/dev/block/259:1/partition"))
 		return "1\n";
 	if (!strcmp(path, "/sys/dev/block/259:1/../dev"))
 		return "259:0\n";
 	if (!strcmp(path, "/sys/dev/block/259:1/size"))
 		return "2049\n";
+	if (!strcmp(path, "/sys/dev/block/8:0/dev"))
+		return "8:0\n";
 	return NULL;
 }
 
