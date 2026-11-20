@@ -47,7 +47,7 @@ int del_topo(int dev_fd, const char *dev)
 	return p2p_del_topo(dev_fd, st.st_rdev);
 }
 
-int register_mem(int dev_fd, struct p2p_mem_register_param *param)
+int register_mem(int dev_fd, const struct p2p_mem_register_param *param)
 {
 	if (ioctl(dev_fd, IOCTL_REGISTER_MEM, param) < 0)
 		return -errno;
@@ -81,8 +81,10 @@ int rw_file(int dev_fd, const struct io_parameter *param)
 	if (param->flags & ~P2P_IO_F_MASK)
 		return -EOPNOTSUPP;
 	if (param->flags & P2P_IO_F_REGISTERED_MEM) {
-		if (!param->mem_handle || param->host_pid)
+		if (param->host_pid)
 			return -EINVAL;
+		if (param->mem_fd < 0)
+			return -EBADF;
 	} else if (param->host_pid < 0) {
 		return -EINVAL;
 	}
@@ -133,10 +135,10 @@ int rw_file(int dev_fd, const struct io_parameter *param)
 	io->flags = param->flags;
 	if (param->flags & P2P_IO_F_REGISTERED_MEM) {
 		io->host_pid = 0;
-		io->mem_handle = param->mem_handle;
+		io->mem_fd = param->mem_fd;
 	} else {
 		io->host_pid = param->host_pid ? param->host_pid : getpid();
-		io->mem_handle = 0;
+		io->mem_fd = -1;
 	}
 	io->iov = (uint64_t)(uintptr_t)param->iov;
 	io->iov_nr = param->iov_nr;
