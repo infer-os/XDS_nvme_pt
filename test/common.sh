@@ -5,7 +5,7 @@
 
 readonly SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
-readonly CMB_SIZE=$((128 << 20))
+readonly CMB_SIZE=$((1024 << 20))
 readonly CMB_MAX_PAGES=$((CMB_SIZE >> 12))
 readonly NS_SIZE=$((64 << 20))
 readonly STUB_PAGE_SIZE=$((2 << 20))
