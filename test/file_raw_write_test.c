@@ -141,33 +141,41 @@ struct extent_info {
 
 static int query_fiemap(const char *path, off_t offset, off_t length, struct extent_info *out)
 {
-	struct {
-		struct fiemap fm;
-		struct fiemap_extent ex[8];
-	} buf;
+	unsigned int max_extents = 8;
+	struct fiemap *fm = calloc(1, sizeof(*fm) +
+				    max_extents * sizeof(struct fiemap_extent));
 	int fd;
 	int err;
+	int ret;
 
+	if (!fm)
+		return -ENOMEM;
 	fd = open(path, O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-		return -errno;
-	memset(&buf, 0, sizeof(buf));
-	buf.fm.fm_start = (uint64_t)offset;
-	buf.fm.fm_length = (uint64_t)length;
-	buf.fm.fm_extent_count = 8;
-	err = ioctl(fd, FS_IOC_FIEMAP, &buf.fm);
+	if (fd < 0) {
+		ret = -errno;
+		goto out;
+	}
+	fm->fm_start = (uint64_t)offset;
+	fm->fm_length = (uint64_t)length;
+	fm->fm_extent_count = max_extents;
+	err = ioctl(fd, FS_IOC_FIEMAP, fm);
 	close(fd);
-	if (err)
-		return -errno;
+	if (err) {
+		ret = -errno;
+		goto out;
+	}
 	if (out) {
-		out->mapped = (int)buf.fm.fm_mapped_extents;
-		if (buf.fm.fm_mapped_extents) {
-			out->physical = buf.fm.fm_extents[0].fe_physical;
-			out->length = buf.fm.fm_extents[0].fe_length;
-			out->flags = buf.fm.fm_extents[0].fe_flags;
+		out->mapped = (int)fm->fm_mapped_extents;
+		if (fm->fm_mapped_extents) {
+			out->physical = fm->fm_extents[0].fe_physical;
+			out->length = fm->fm_extents[0].fe_length;
+			out->flags = fm->fm_extents[0].fe_flags;
 		}
 	}
-	return (int)buf.fm.fm_mapped_extents;
+	ret = (int)fm->fm_mapped_extents;
+out:
+	free(fm);
+	return ret;
 }
 
 static int verify_unwritten(const char *path, size_t length)
