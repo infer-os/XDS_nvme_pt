@@ -12,6 +12,8 @@
 #include "compat_velinux.h"
 #elif defined(P2P_COMPAT_UBUNTU)
 #include "compat_ubuntu.h"
+#elif defined(P2P_COMPAT_OPENEULER)
+#include "compat_openeuler.h"
 #else
 #include "compat_vanilla.h"
 #endif

@@ -1,8 +1,8 @@
 KSRC ?= /lib/modules/$(shell uname -r)/build
 
-# Kernel flavor that selects compat.h: vanilla (default), velinux or ubuntu.
-# The flavor also applies to recursive module builds, so pass it on the
-# command line or through the environment.
+# Kernel flavor that selects compat.h: vanilla (default), velinux, ubuntu or
+# openeuler. The flavor also applies to recursive module builds, so pass it on
+# the command line or through the environment.
 KERNEL_FLAVOR ?= vanilla
 export KERNEL_FLAVOR
 
@@ -12,11 +12,13 @@ else ifeq ($(KERNEL_FLAVOR),velinux)
 ccflags-y += -DP2P_COMPAT_VELINUX
 else ifeq ($(KERNEL_FLAVOR),ubuntu)
 ccflags-y += -DP2P_COMPAT_UBUNTU
+else ifeq ($(KERNEL_FLAVOR),openeuler)
+ccflags-y += -DP2P_COMPAT_OPENEULER
 else
-$(error unknown KERNEL_FLAVOR "$(KERNEL_FLAVOR)", expected vanilla, velinux or ubuntu)
+$(error unknown KERNEL_FLAVOR "$(KERNEL_FLAVOR)", expected vanilla, velinux, ubuntu or openeuler)
 endif
 
-.PHONY: all mod mod_vanilla mod_velinux mod_ubuntu lib binding clean test
+.PHONY: all mod mod_vanilla mod_velinux mod_ubuntu mod_openeuler lib binding clean test
 
 all: mod lib
 
@@ -31,6 +33,9 @@ mod_velinux:
 
 mod_ubuntu:
 	$(MAKE) mod KERNEL_FLAVOR=ubuntu
+
+mod_openeuler:
+	$(MAKE) mod KERNEL_FLAVOR=openeuler
 
 lib:
 	$(MAKE) -C file_p2p
