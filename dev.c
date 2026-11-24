@@ -183,7 +183,6 @@ struct p2p_io_context {
 	int io_err;
 	int issue_err;
 	struct p2p_batch *batch;
-	u8 topo_kind;
 #if defined(CALC_CRC32) || defined(DUMP_CONTENT)
 	struct work_struct finalize_work;
 #endif
@@ -1471,13 +1470,8 @@ static void p2p_publish_io_done(struct p2p_io_context *io_ctx)
 void p2p_complete_io(struct request *req, blk_status_t status)
 {
 	struct p2p_io_context *io_ctx = req->end_io_data;
-	u64 now;
 
 	p2p_stats_io_complete(io_ctx->op, status);
-	now = ktime_get_ns();
-	if (req->start_time_ns && now >= req->start_time_ns)
-		p2p_stats_lat_add(io_ctx->topo_kind, P2P_LAT_DEV,
-				  now - req->start_time_ns, 0);
 	if (status)
 		cmpxchg(&io_ctx->io_err, 0, status);
 
@@ -1544,7 +1538,6 @@ static int do_io(struct p2p_io_context *io_ctx, struct block_device *bdev, unsig
 	req->end_io = p2p_end_io;
 	atomic_inc(&io_ctx->io_ref);
 	p2p_stats_io_issued(io_ctx->op, (u64)sector_nr << SECTOR_SHIFT);
-	req->start_time_ns = ktime_get_ns();
 
 	p2p_execute_rq_nowait(req, disk);
 
@@ -1576,7 +1569,6 @@ static int do_ios(struct p2p_io_context *io_ctx, struct topo *topo,
 			struct topo_bdev *topo_bdev;
 			struct block_device *to_bdev;
 			u64 to_sector;
-			u64 t0;
 			u32 topo_limit = left;
 			u32 disk_nr = left;
 			u32 zero_nr = 0;
@@ -1613,12 +1605,9 @@ static int do_ios(struct p2p_io_context *io_ctx, struct topo *topo,
 				topo_limit = disk_nr;
 			}
 
-			t0 = ktime_get_ns();
 			err = topo->ops->map_sector(topo, sector, topo_limit,
 						     &topo_bdev, &to_sector,
 						     &topo_limit);
-			p2p_stats_lat_add(topo->kind, P2P_LAT_MAP,
-					  ktime_get_ns() - t0, 0);
 			if (err)
 				goto out;
 			to_bdev = p2p_handle_to_bdev(topo_bdev->handle);
@@ -1637,12 +1626,8 @@ static int do_ios(struct p2p_io_context *io_ctx, struct topo *topo,
 				if (err)
 					goto out;
 			}
-			t0 = ktime_get_ns();
 			err = do_io(io_ctx, to_bdev, topo_bdev->nsid, to_sector, to_submit,
 				    p2p_iov_iter_addr(&iter));
-			p2p_stats_lat_add(topo->kind, P2P_LAT_ISSUE,
-					  ktime_get_ns() - t0,
-					  err ? 0 : (u64)to_submit << SECTOR_SHIFT);
 			if (err)
 				goto out;
 			if (io_ctx->op == P2P_IO_WRITE)
@@ -1940,7 +1925,6 @@ static int p2p_submit_one(struct p2p_batch *batch, const struct p2p_io_param *pa
 	struct p2p_pinned_io_mem pinned_mem;
 	struct topo *topo = NULL;
 	u64 data_size;
-	u64 prep_t0 = ktime_get_ns();
 	unsigned int pa_iov_nr;
 	int err;
 
@@ -2001,7 +1985,6 @@ static int p2p_submit_one(struct p2p_batch *batch, const struct p2p_io_param *pa
 	pa_iov = NULL;
 
 	io_ctx->batch = batch;
-	io_ctx->topo_kind = topo->kind;
 	if (atomic_inc_return(&batch->io_cnt) > P2P_CQ_SIZE) {
 		if (atomic_dec_and_test(&batch->io_cnt))
 			p2p_wake_batch_waiters(batch);
@@ -2011,7 +1994,6 @@ static int p2p_submit_one(struct p2p_batch *batch, const struct p2p_io_param *pa
 	}
 	atomic_inc(&batch->outstanding_events);
 
-	p2p_stats_lat_add(topo->kind, P2P_LAT_PREP, ktime_get_ns() - prep_t0, 0);
 	io_ctx->issue_err = do_ios(io_ctx, topo, extents, param->ext_nr);
 	if (io_ctx->issue_err)
 		p2p_stats_io_issue_failed(io_ctx->op);

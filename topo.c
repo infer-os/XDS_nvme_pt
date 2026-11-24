@@ -21,6 +21,12 @@
 #include "topo.h"
 
 #define P2P_SYSFS_BDEV_PATH_MAX 48
+
+#define P2P_TOPO_KIND_NVME 0U
+#define P2P_TOPO_KIND_LINEAR 1U
+#define P2P_TOPO_KIND_RAID0 2U
+#define P2P_TOPO_KIND_LOOP 3U
+
 /* 256K entries, 1 MiB. Coarsen the slot until the table fits. */
 #define LOOP_INDEX_MAX_SLOTS (1U << 18)
 
