@@ -4,6 +4,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
+#include <linux/io.h>
 #include <linux/kdev_t.h>
 #include <linux/fs.h>
 #include <linux/cdev.h>
@@ -1491,12 +1492,12 @@ static int p2p_zero_pa(u64 pa, u32 nr_sectors)
 	while (nr_sectors) {
 		u32 n = min(nr_sectors, chunk);
 		size_t len = (size_t)n << SECTOR_SHIFT;
-		void *addr;
+		void __iomem *addr;
 
 		addr = ioremap(pa, len);
 		if (!addr)
 			return -ENOMEM;
-		memset(addr, 0, len);
+		memset_io(addr, 0, len);
 		iounmap(addr);
 		pa += len;
 		nr_sectors -= n;
